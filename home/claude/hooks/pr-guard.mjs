@@ -11,7 +11,7 @@
  *
  * ## 判準（任一成立就擋）
  *
- * 指令裡有 git push 的段，cwd（或 cd／pushd／-C）有一個是 owner bruuucechang 的 repo，而且：
+ * 指令裡有 git push 的段，cwd（或 cd／pushd／-C）有一個是 owner 是 config.json github_owner 的 repo，而且：
  *   · 那段帶 --no-verify，但推的不是 pr/ 分支（refspec 寫明 pr/，或在 pr/ 分支上推 HEAD）。
  *     animyria 推 PR 分支照 ship 5b 帶 --no-verify，pre-push 的長測試由 pushq 在合併前跑。
  *   · 那段實際執行的 git 不到 2.55（`/usr/bin/git`、`xcrun git` 是 Apple 的 2.50，不跑設定檔掛的 hook；2026-10-21 實測）。
@@ -33,9 +33,11 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appendLog } from './lib/log.mjs';
-import { cli, isMain } from './lib/hook-cli.mjs';
+import { cli, isMain, tilde } from './lib/hook-cli.mjs';
 import { git, hasNoVerify, isMine, pushSegments, repoDirs } from './lib/shell-git.mjs';
 import { execFileSync } from 'node:child_process';
+
+import { config } from './lib/config.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OFF = join(HERE, 'pr-guard.off');
@@ -62,7 +64,9 @@ function toPr(seg, dirs) {
 
 /** 回 null＝放行。 */
 export function run(input) {
-  if (existsSync(OFF)) return null;
+  // pr_guard: false＝這台沒裝全域 pre-push（install.sh 遇到 git 不到 2.55 時寫的），整支不動作：
+  // 底下的檢查都是「pre-push 必須會跑」，沒裝還照查的話，推自己的 repo 會一律被擋。
+  if (existsSync(OFF) || config().pr_guard === false) return null;
   const cmd = input?.tool_input?.command ?? '';
   if (typeof cmd !== 'string' || !/\bpush\b/.test(cmd)) return null;
   // 引號字串與 heredoc 本體裡提到 git push 不算數；cd 的目錄照原字串找（寧可多列）
@@ -81,7 +85,7 @@ export function run(input) {
   }
   if (process.platform === 'darwin') {
     try { git(cwd, ['config', '--global', '--get', 'hook.pr-guard.command'], 2000); }
-    catch { why.push('這台還沒裝全域 pre-push（hook.pr-guard.*），直推程式碼不會被擋。先跑 ~/.claude/skills/bootstrap.sh 或照它第 77–81 行設好。'); }
+    catch { why.push('這台還沒裝全域 pre-push（hook.pr-guard.*），直推程式碼不會被擋。先跑 repo 根目錄的 install.sh（私人版是 bootstrap.sh）設好 hook.pr-guard.*。'); }
   }
   if (!why.length) return null;
 
@@ -94,7 +98,7 @@ export function run(input) {
         '自己的 repo 推之前，擋直推的全域 pre-push `pr-prepush.mjs` 必須會跑（2026-10-20 起程式碼走 PR，ship skill 第 0 節 5b）：',
         ...[...new Set(why)].map((w) => '  · ' + w),
         '',
-        '（使用者真的要繞過：`touch ~/.claude/skills/home/claude/hooks/pr-guard.off`）',
+        `（使用者真的要繞過：\`touch ${tilde(OFF)}\`）`,
       ].join('\n'),
     },
   };

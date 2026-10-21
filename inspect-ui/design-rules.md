@@ -178,7 +178,7 @@ EOF2
 怎麼重跑：
 
 ```bash
-SP=/private/tmp/claude-501/-Users-bruuucemac/17a00d21-cc8b-49ed-a2c1-848cbec37c54/scratchpad
+SP=<放驗收腳本的暫存目錄>   # 當時是作者那個 session 的 scratchpad；scan-fixture.js 等腳本沒進 repo，要自己重寫
 cd $SP && python3 -m http.server <埠> --bind 127.0.0.1 &   # 記下 pid，驗完 kill 那個 pid
 cp ~/.claude/skills/inspect-ui/design-scan.js ~/.dev-browser/tmp/
 dev-browser --browser design-scan --headless --timeout 60 run $SP/scan-fixture.js    # 自製測試頁

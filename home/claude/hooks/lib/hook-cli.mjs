@@ -36,3 +36,9 @@ export async function cli(run) {
   } catch {}
   process.exit(0);
 }
+
+/** 訊息裡給使用者看的路徑：家目錄縮成 ~。repo 不一定在 ~/.claude/skills（公開版建議 clone 到別處），所以路徑一律從檔案位置算。 */
+export function tilde(p) {
+  const h = process.env.HOME || '';
+  return h && (p === h || p.startsWith(h + '/')) ? '~' + p.slice(h.length) : p;
+}

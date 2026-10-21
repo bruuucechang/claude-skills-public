@@ -10,7 +10,7 @@
 // --all、2>&1 被當 refspec……）能讓正則猜錯要推什麼。pre-push 由 git 給出確切的 ref 與 sha，沒有猜的空間。
 // 唯一跳過 pre-push 的是 --no-verify，那個交給 PreToolUse 的 pr-guard.mjs 擋。
 //
-// 判準：推的人是 agent（CLAUDECODE=1 或 CODEX_THREAD_ID）、origin owner 是 bruuucechang、
+// 判準：推的人是 agent（CLAUDECODE=1 或 CODEX_THREAD_ID）、origin owner 是 config.json 的 github_owner、
 // 遠端分支已存在且不是 pr/、autoloop/ 開頭、推的範圍裡有非 .md 的檔或 agent 規則檔（ship-classify 判 code）→ exit 1。
 // 使用者自己在終端機推、pushq（PUSHQ_PUSHER）、新分支、刪分支都放行。判斷不了就放行（壞掉不能擋死推送）。
 // 逃生門：touch ~/.claude/skills/home/claude/hooks/pr-guard.off

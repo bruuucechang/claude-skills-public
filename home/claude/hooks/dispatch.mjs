@@ -27,7 +27,7 @@
  * 加進下面的 ROUTES，跑 `node test-dispatch.mjs`。
  * 每支花多久：`HOOK_TIMING=1 HOOK_NOLOG=1 node dispatch.mjs <事件> < 輸入.json`（印在 stderr）。
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { appendLog } from './lib/log.mjs';
@@ -72,9 +72,15 @@ export function checksFor(event, input, routes = ROUTES) {
   return list.map((c) => (Array.isArray(c) ? { name: c[0], timeout: c[1] } : { name: c, timeout: DEFAULT_TIMEOUT }));
 }
 
+/** 公開版拿掉的檢查（多帳號、iTerm）：檔案不在就當作沒有這支，不記錯誤。其他檢查不見照樣記進 dispatch.log。 */
+const OPTIONAL = new Set(['account-check', 'account-drain', 'pane-state']);
+const absent = () => null;
+
 async function load(name) {
   if (name === 'session-start-context') return startContext;
-  const m = await import(pathToFileURL(join(HERE, `${name}.mjs`)).href);
+  const f = join(HERE, `${name}.mjs`);
+  if (OPTIONAL.has(name) && !existsSync(f)) return absent;
+  const m = await import(pathToFileURL(f).href);
   return m.run;
 }
 
@@ -137,7 +143,13 @@ async function main() {
   const event = process.argv[2] || input?.hook_event_name;
   const routes = process.argv[3] === 'codex' ? CODEX_ROUTES : ROUTES;
   const results = await runChecks(event, input, { checks: checksFor(event, input, routes) });
-  const out = merge(event, results.map((r) => r.out));
+  const outs = results.map((r) => r.out);
+  // config.json 壞掉時讀設定的檢查全部退回「不動作」，開場講一次，不要安靜關掉
+  if (event === 'SessionStart') {
+    const { config } = await import('./lib/config.mjs');
+    if (config().error) outs.push({ systemMessage: `⚠ config.json 讀不懂，git 作者／直推／語言檢查都停了：${config().error}` });
+  }
+  const out = merge(event, outs);
   if (out) process.stdout.write(JSON.stringify(out));
   process.exit(0);
 }

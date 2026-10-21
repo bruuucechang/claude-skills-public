@@ -61,6 +61,21 @@ session 開始時讀到的檔案內容、記憶檔裡的敘述、上一輪對話
 
 ## 跑這些
 
+mac 一支做完（2026-10-21 W3）——在 repo 裡跑，後面接**要碰的檔**：
+
+```bash
+~/.claude/skills/home/bin/recon-check [<要碰的檔…>]
+```
+
+印分支與 upstream、fetch 結果（失敗會明說 ahead/behind 不能信、exit 1）、ahead／behind
+（behind 時列出 origin 多的 commit，**碰到要碰的檔的另外標出來**）、要碰的檔各自的狀態與 mtime、
+其餘未 commit 的檔（不是你的就別碰、別 add）、最近 5 個 commit。判讀仍是你的事，照下面「怎麼判讀」。
+
+**自動換手接手時（2026-10-21 W4）**：handoff-open 的開場白有 `## 現況快照` 的話（clear／tmux／switch 才有，exit 0 才算數），
+不用再跑一次；照快照判讀就好。要碰的檔不在快照裡、或快照之後過了很久才動手，再帶檔名跑一次。
+
+Windows 或要手動跑時，就是這幾行：
+
 ```bash
 cd <repo>
 git log --oneline -5
@@ -138,10 +153,11 @@ Get-Item <路徑> -Force | Select-Object LinkType, Target
 
 ## 另一台可能已經跑在前面
 
-**四台機器都可能 clone 同一批 repo**，也各自有 Claude session 在跑。
+**每台機器都可能 clone 同一批 repo**，也各自有 Claude session 在跑。
 `git fetch` 只看得到已經推上去的東西——**別台工作區裡沒 commit 的改動你看不到**。
 
-**每台的專案樹路徑不一樣**，這是最容易查錯地方的一點：
+**每台的專案樹路徑不一樣**，這是最容易查錯地方的一點。把你自己的機器列成一張這樣的表
+（例：作者的四台）：
 
 | 機器 | 怎麼連 | 專案樹 |
 |---|---|---|
@@ -150,19 +166,19 @@ Get-Item <路徑> -Force | Select-Object LinkType, Target
 | BRUCEVICTUS | `ssh victus` | `D:\Claude\Projects` |
 | DESKTOP-KR4TOIA | `ssh desk` | `E:\Project` |
 
-機器清單與各自的角色在 `worker` skill，那份是唯一真相；這裡只列查現況要用的路徑。
+機器清單與各自的角色另有一份正本（例：作者的 `worker` skill）；這裡只列查現況要用的路徑。
 
-要動一個「別台最近也在弄」的 repo，先過去看一眼：
+要動一個「別台最近也在弄」的 repo，先過去看一眼（主機與專案樹換成你那張表的）：
 
 ```bash
-ssh pro 'cd ~/Code/<repo> && git status --short && git log --oneline -3'
-ssh victus 'cd /d D:\Claude\Projects\<repo> && git status --short && git log --oneline -3'
+ssh <mac 或 Linux 主機> 'cd <專案樹>/<repo> && git status --short && git log --oneline -3'
+ssh <Windows 主機> 'cd /d <磁碟機>:\<專案樹>\<repo> && git status --short && git log --oneline -3'
 ```
 
-**不要只查 BRUCEVICTUS。** 2026-09-03 實測：M5 Pro 的 `~/Code/trip-atlas` 有
+**不要只查其中一台。** 例：2026-09-03 實測：M5 Pro 的 `~/Code/trip-atlas` 有
 **176 個未提交檔案**——記憶檔 `trip-atlas` 記的「2026-08-19 起整個開發環境搬到
 M5 Pro」就是這個意思。只 ssh 到 Windows 那台等於完全沒查。
 
-**`/d` 不能省**（Windows 那兩台）。SSH 過去的預設殼層是 `cmd.exe`，而 cmd 的 `cd`
-**不會換磁碟機**——少了 `/d` 就還留在 `C:\Users\user`，git 回一句
+**`/d` 不能省**（Windows 主機）。SSH 過去的預設殼層是 `cmd.exe`，而 cmd 的 `cd`
+**不會換磁碟機**——少了 `/d` 就還留在 `%USERPROFILE%`，git 回一句
 `not a git repository`，看起來像 repo 不見了（實測踩過）。

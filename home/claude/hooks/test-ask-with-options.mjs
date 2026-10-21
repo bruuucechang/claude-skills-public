@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ask-with-options.mjs 的判斷式案例表：node test-ask-with-options.mjs（全過離開碼 0）
 // 載入本尊的判斷式，不另外抄正規式（抄的那份會分岔，而分岔時測試還是綠的）。
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { endsWithQuestion, defersDecision } from './ask-with-options.mjs';
@@ -22,7 +22,9 @@ const cases = [
 ];
 
 // ask-with-options.log 每一筆歷史 BLOCK 逐筆標過（log 只存最後 140 字，判斷只看最後一句所以夠用）
-const history = JSON.parse(readFileSync(join(HERE, 'test-ask-with-options.history.json'), 'utf8'));
+// 公開版沒有這份（是真實對話的片段），缺了就只跑上面的案例
+const HIST = join(HERE, 'test-ask-with-options.history.json');
+const history = existsSync(HIST) ? JSON.parse(readFileSync(HIST, 'utf8')) : [];
 for (const h of history) cases.push([h.block, h.tail, h.note]);
 
 let fail = 0;

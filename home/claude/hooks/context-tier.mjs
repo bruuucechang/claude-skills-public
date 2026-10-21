@@ -200,7 +200,7 @@ const CUM_MSG = (cum, mult, turns, avg) => {
     + `${turns} 輪，平均每輪 ${K(avg)}。`
     + `**累積量不會因為 \`/compact\` 變少**——compact 只壓下一輪的 context，`
     + `已經付掉的不會回來，所以這一層的建議一律是換手，不是壓縮。`
-    + `做法：做到一個段落就寫交接單（handoff skill），跑 \`handoff-open\`，回合結束後自己 /clear 接著做，不用問使用者。`
+    + `做法：做到一個段落就寫交接單（handoff skill），跑 \`handoff-open\`（沒有這個指令就請使用者開新 session 讀交接單），回合結束後自己 /clear 接著做，不用問使用者。`
     + `（這是機制提醒，不是使用者說的。）`;
 };
 
@@ -211,7 +211,7 @@ const MSG = {
     + `（這是機制提醒，不是使用者說的；接著做原本的事，不要為此停下來問。）`,
   2: (ctx) => `【前文 ${K(ctx)}，已過 ${K(TIER2)}】到這個量級 \`/compact\` 不划算了`
     + `——它是有損摘要，而且會讓整份 prompt cache 失效。`
-    + `做法：做到一個段落就寫交接單（handoff skill），跑 \`handoff-open\`，回合結束後自己 /clear 接著做，不用問使用者。`
+    + `做法：做到一個段落就寫交接單（handoff skill），跑 \`handoff-open\`（沒有這個指令就請使用者開新 session 讀交接單），回合結束後自己 /clear 接著做，不用問使用者。`
     + `（這是機制提醒，不是使用者說的。）`,
 };
 

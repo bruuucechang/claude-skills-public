@@ -2,6 +2,7 @@
 // pr-guard.mjs（PreToolUse，只擋 --no-verify）與 home/bin/pr-prepush.mjs（全域 pre-push）的案例表：
 //   node test-pr-guard.mjs（全過離開碼 0）
 // pr-prepush 走真的 `git push`：暫存目錄開假 remote（路徑裡帶 owner），用 -c hook.* 掛上去，看推不推得出去。
+import './lib/test-config.mjs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // pr-guard 只部署在 mac：pre-push 走 git ≥ 2.55 的設定式 hook（git config hook.*），兩台 Windows 是 git 2.41 也沒裝。
 // 照 mac 的環境寫的案例在 Windows 跑會整片紅，那是「沒部署」不是「壞了」，所以明白印出跳過。
 if (process.platform === 'win32') { console.log('跳過：pr-guard 只部署在 mac（Windows 沒有 git ≥ 2.55 的設定式 hook）'); process.exit(0); }
+// 設定式 hook（hook.<名字>.command）要 git 2.55 以上；舊版 git 根本不會跑 pre-push，案例會整片「放」。
+{ const [maj, min] = execFileSync('git', ['--version'], { encoding: 'utf8' }).match(/(\d+)\.(\d+)/).slice(1).map(Number);
+  if (maj < 2 || (maj === 2 && min < 55)) { console.log(`跳過：git ${maj}.${min} 沒有設定式 hook（要 2.55 以上）`); process.exit(0); } }
+// 乾淨的機器（容器、CI）沒有 git 身分，commit 會失敗；給一個測試用的
+process.env.GIT_AUTHOR_NAME ||= 't'; process.env.GIT_AUTHOR_EMAIL ||= 't@example.com';
+process.env.GIT_COMMITTER_NAME ||= 't'; process.env.GIT_COMMITTER_EMAIL ||= 't@example.com';
 // 不讀這台真的全域設定（主 checkout 那份 pr-prepush 會跟著跑、蓋掉要測的這份），改用暫存的全域設定，
 // 照 bootstrap 的寫法掛「這個 worktree 的」pr-prepush.mjs——順便測到 bootstrap 那一行本身。
 const GLOBAL = join(mkdtempSync(join(tmpdir(), 'pr-guard-cfg-')), 'gitconfig');
@@ -75,23 +82,23 @@ const cases = [
   ['git --no-pager push origin master', '其他全域旗標'],
   ['git -c k=v push origin master', '-c 在前面'],
 ];
-for (const [cmd, label] of cases) { const w = repo('bruuucechang'); commit(w, 'a.py'); check(BLOCK, `pre-push：${label}`, push(w, cmd)); }
-{ const w = repo('bruuucechang'); commit(w, 'a.py'); sh(w, 'switch', '-q', '-c', 'pr/1-x');
+for (const [cmd, label] of cases) { const w = repo('octocat'); commit(w, 'a.py'); check(BLOCK, `pre-push：${label}`, push(w, cmd)); }
+{ const w = repo('octocat'); commit(w, 'a.py'); sh(w, 'switch', '-q', '-c', 'pr/1-x');
   check(BLOCK, 'pre-push：--all 連 master 一起推', push(w, 'git push --all origin')); }
-{ const w = repo('bruuucechang'); commit(w, 'a.py'); sh(w, 'switch', '-q', '-c', 'pr/1-x');
+{ const w = repo('octocat'); commit(w, 'a.py'); sh(w, 'switch', '-q', '-c', 'pr/1-x');
   check(PASS, 'pre-push：推 pr/ 分支', push(w, 'git push -u origin HEAD', AGENT, 'pr/1-x')); }
-{ const w = repo('bruuucechang'); sh(w, 'switch', '-q', '-c', 'autoloop/main'); sh(w, 'push', '-q', '-u', 'origin', 'autoloop/main'); commit(w, 'a.py');
+{ const w = repo('octocat'); sh(w, 'switch', '-q', '-c', 'autoloop/main'); sh(w, 'push', '-q', '-u', 'origin', 'autoloop/main'); commit(w, 'a.py');
   check(PASS, 'pre-push：產線的 autoloop/ 分支（已存在）', push(w, 'git push', AGENT, 'autoloop/main')); }
-{ const w = repo('bruuucechang'); sh(w, 'switch', '-q', '-c', 'autoloopx'); sh(w, 'push', '-q', '-u', 'origin', 'autoloopx'); commit(w, 'a.py');
+{ const w = repo('octocat'); sh(w, 'switch', '-q', '-c', 'autoloopx'); sh(w, 'push', '-q', '-u', 'origin', 'autoloopx'); commit(w, 'a.py');
   check(BLOCK, 'pre-push：autoloopx 不是 autoloop/', push(w, 'git push', AGENT, 'autoloopx')); }
-{ const w = repo('bruuucechang'); commit(w, 'notes.md'); check(PASS, 'pre-push：只動 .md', push(w, 'git push')); }
-{ const w = repo('bruuucechang'); commit(w, 'SKILL.md'); check(BLOCK, 'pre-push：規則檔 SKILL.md', push(w, 'git push')); }
-{ const w = repo('bruuucechang'); commit(w, 'a.py'); sh(w, 'switch', '-q', '-c', 'feature-new');
+{ const w = repo('octocat'); commit(w, 'notes.md'); check(PASS, 'pre-push：只動 .md', push(w, 'git push')); }
+{ const w = repo('octocat'); commit(w, 'SKILL.md'); check(BLOCK, 'pre-push：規則檔 SKILL.md', push(w, 'git push')); }
+{ const w = repo('octocat'); commit(w, 'a.py'); sh(w, 'switch', '-q', '-c', 'feature-new');
   check(PASS, 'pre-push：遠端還沒有的新分支', push(w, 'git push -u origin feature-new', AGENT, 'feature-new')); }
-{ const w = repo('bruuucechang'); commit(w, 'a.py'); check(PASS, 'pre-push：使用者自己在終端機推', push(w, 'git push', HUMAN)); }
-{ const w = repo('bruuucechang'); commit(w, 'a.py');
+{ const w = repo('octocat'); commit(w, 'a.py'); check(PASS, 'pre-push：使用者自己在終端機推', push(w, 'git push', HUMAN)); }
+{ const w = repo('octocat'); commit(w, 'a.py');
   check(PASS, 'pre-push：從 Claude 開的 Terminal（繼承 CLAUDECODE、沒有 session id）', push(w, 'git push', { ...HUMAN, CLAUDECODE: '1' })); }
-{ const w = repo('bruuucechang');
+{ const w = repo('octocat');
   // 遠端多一筆 a.py、本機只動 .md，pull 之後在 merge commit 裡改 a.py：程式碼只出現在 merge commit
   const other = w + '-2'; execFileSync('git', ['clone', '-q', sh(w, 'remote', 'get-url', 'origin'), other], { stdio: 'ignore' });
   sh(other, 'config', 'user.name', 't'); sh(other, 'config', 'user.email', 't@t');
@@ -101,20 +108,20 @@ for (const [cmd, label] of cases) { const w = repo('bruuucechang'); commit(w, 'a
   writeFileSync(join(w, 'a.py'), 'changed in merge\n'); sh(w, 'add', 'a.py'); sh(w, 'commit', '-q', '--amend', '--no-edit');
   if (!sh(w, 'log', '-1', '--format=%P').includes(' ')) throw new Error('測試前提壞了：HEAD 不是 merge commit');
   check(BLOCK, 'pre-push：merge commit 解衝突改的程式碼', push(w, 'git push origin master')); }
-{ const w = repo('bruuucechang'); commit(w, 'a.py');
+{ const w = repo('octocat'); commit(w, 'a.py');
   sh(w, 'config', 'hook.pr-guard.command', ONELINER('/nonexistent/pr-prepush.mjs'));   // repo 設定蓋過全域的同名 hook
   check(PASS, 'pre-push：hook 檔不見了就放行（bootstrap 的寫法），不擋死整台', push(w, 'git push')); }
-{ const w = repo('bruuucechang'); commit(w, 'a.py'); check(BLOCK, 'pre-push：Codex（CODEX_THREAD_ID）', push(w, 'git push', { ...HUMAN, CODEX_THREAD_ID: 't' })); }
-{ const w = repo('bruuucechang'); commit(w, 'a.py'); check(PASS, 'pre-push：pushq（PUSHQ_PUSHER）', push(w, 'git push', { ...AGENT, PUSHQ_PUSHER: '1' })); }
+{ const w = repo('octocat'); commit(w, 'a.py'); check(BLOCK, 'pre-push：Codex（CODEX_THREAD_ID）', push(w, 'git push', { ...HUMAN, CODEX_THREAD_ID: 't' })); }
+{ const w = repo('octocat'); commit(w, 'a.py'); check(PASS, 'pre-push：pushq（PUSHQ_PUSHER）', push(w, 'git push', { ...AGENT, PUSHQ_PUSHER: '1' })); }
 { const w = repo('someoneelse'); commit(w, 'a.py'); check(PASS, 'pre-push：別人的 repo', push(w, 'git push')); }
-{ const w = repo('BruuuceChang'); commit(w, 'a.py'); check(BLOCK, 'pre-push：owner 大小寫不同（GitHub 不分）', push(w, 'git push')); }
-{ const w = repo('bruuucechang');
+{ const w = repo('OctoCat'); commit(w, 'a.py'); check(BLOCK, 'pre-push：owner 大小寫不同（GitHub 不分）', push(w, 'git push')); }
+{ const w = repo('octocat');
   for (let i = 0; i < 30000; i++) { if (i % 1000 === 0) mkdirSync(join(w, `big/d${i / 1000}`), { recursive: true }); writeFileSync(join(w, `big/d${Math.floor(i / 1000)}/f${i}.py`), ''); }
   sh(w, 'add', '.'); sh(w, 'commit', '-qm', 'huge');
   const t0 = Date.now();
   check(BLOCK, 'pre-push：3 萬個 .py（輸出超過 1MB 不能放行）', push(w, 'git push'));
   console.log(`  （${Date.now() - t0} ms）`); }
-{ const w = repo('bruuucechang');
+{ const w = repo('octocat');
   for (let i = 0; i < 1200; i++) { mkdirSync(join(w, 'a/b'), { recursive: true }); writeFileSync(join(w, `a/b/n${i}.md`), 'x'); }
   sh(w, 'add', '.'); sh(w, 'commit', '-qm', 'big'); commit(w, 'SKILL.md');
   const t0 = Date.now();
@@ -122,7 +129,7 @@ for (const [cmd, label] of cases) { const w = repo('bruuucechang'); commit(w, 'a
   console.log(`  （${Date.now() - t0} ms）`); }
 
 // ── PreToolUse：只擋 --no-verify
-{ const w = repo('bruuucechang');
+{ const w = repo('octocat');
   check(BLOCK, 'PreToolUse：--no-verify 推 master', denied('git push --no-verify origin master', w));
   check(BLOCK, 'PreToolUse：cd 進去再 --no-verify', denied(`cd ${w} && git push --no-verify`, root));
   check(BLOCK, 'PreToolUse：pushd 進去', denied(`pushd ${w} && git push --no-verify`, root));
@@ -194,7 +201,7 @@ for (const [cmd, label] of cases) { const w = repo('bruuucechang'); commit(w, 'a
   check(PASS, 'pushSegments：heredoc 本體不算', pushSegments(`cat > n.md <<'EOF'\ngit push origin master\nEOF`).length === 1);
   check(PASS, 'pushq bypassEnv：heredoc 裡寫到 PUSHQ_BYPASS 不算', /PUSHQ_BYPASS=/.test(stripData(`cat > n.md <<'EOF'\nPUSHQ_BYPASS=1\nEOF`))); }
 { const w = repo('someoneelse'); check(PASS, 'PreToolUse：別人的 repo', denied('git push --no-verify', w)); }
-{ const w = repo('bruuucechang');
+{ const w = repo('octocat');
   writeFileSync(GLOBAL, '');   // 還沒跑 bootstrap
   check(BLOCK, 'PreToolUse：這台還沒裝全域 pre-push', denied('git push origin master', w)); }
 

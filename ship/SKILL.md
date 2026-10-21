@@ -9,9 +9,9 @@ description: 「push」「推上去」「/ship」或 commit 之前跑。一氣�
 
 使用者打「push」「git push」「/ship」就是要這整串，**不要中途停下來問**（常設授權：commit 就 push；
 2026-10-20 起程式碼改走 PR、審查通過就自己合併，也是常設授權）。force push、改寫已推歷史不在授權裡。
-只限 `bruuucechang` 的 repo（判準是 remote owner）；Windows 兩台沒裝 `gh` 之前照舊直推。
+只限自己的 repo（判準是 remote owner＝`~/.claude/skills/home/claude/config.json` 的 `github_owner`）；沒裝 `gh` 的機器（例：作者的兩台 Windows）照舊直推。
 
-1. `/recon` 那三行：`git status --short`、`git fetch -q && git status -sb | head -1`。落後就先 `git pull --ff-only`；不能 ff 就停下用選項問。
+1. `~/.claude/skills/home/bin/recon-check <要提交的檔…>`（Windows：`/recon` 那三行 `git status --short`、`git fetch -q && git status -sb | head -1`）。落後就先 `git pull --ff-only`；不能 ff 就停下用選項問。
 2. 跑專案自己的驗證（`CLAUDE.md`／`AGENTS.md` 寫的；常見 `./test.sh`、`npm test`、`bash tools/smoke.sh`）。紅了就修，不准帶著紅燈推。
 3. 下面第 1 節核對作者身分。
 4. **分類**：`~/.claude/skills/home/bin/ship-classify <要提交的檔…>`（用全路徑，別台機器沒有 `~/.local/bin` 的連結）。印 `docs` → 走 5a 直推；印 `code` → 走 5b 開 PR。
@@ -21,7 +21,17 @@ description: 「push」「推上去」「/ship」或 commit 之前跑。一氣�
     改照 5b 第 1 步開 worktree，commit 後 `git -C "$W" push origin HEAD:<目標>`（只有 .md 不用 PR）。
     乾淨才在原地：第 2 節只 add 自己的檔，`add && commit` 同一次呼叫 → `git show --stat HEAD` → `git push` → 確認不再 ahead。
     全域 pre-push `pr-prepush.mjs` 會擋 agent 把程式碼推進非 `pr/` 分支；`pr-guard` hook 擋會跳過它的寫法：`--no-verify`、不到 2.55 的 git（`/usr/bin/git` 是 Apple 2.50）、這台還沒裝全域 hook。
-5b. **PR**（規格 `ship/pr-flow-spec.md`）：
+5b. **PR**（規格 `ship/pr-flow-spec.md`）。**mac 上第 1、2、5、6 步是一支指令**（2026-10-21 W3；審查與合併的判斷仍是你的事）：
+   ```bash
+   ~/.claude/skills/home/bin/ship-pr -F <訊息檔> [--body <PR 內文檔>] <短名> <自己的檔…>   # 最後一行印 PR 完整網址
+   ~/.claude/skills/home/bin/ship-pr --merge <PR 完整網址>                               # 審查通過後
+   ```
+   訊息檔第一行是 PR 標題；沒給 `--body` 時 PR 內文＝訊息第二段起（所以把為什麼、驗證、`Claude-Session`、attribution 寫進訊息檔）。
+   它從 `origin/<目標>` 開 `~/.claude/worktrees/pr-<日期>-<短名>`、整檔搬（檔裡混了別人的 hunk 先照第 2 節分開）、
+   commit 成功後才從共用 checkout 拿掉（之前任何失敗都整個收回）、推分支、`gh pr create --head`。
+   `--merge` 先確認 worktree 乾淨（有未追蹤檔就列出來停下）再移掉、`gh pr merge --squash --delete-branch`、確認 MERGED、共用 checkout ff。
+   要修的時候在它印的 worktree 裡改、commit、`git -C <worktree> push`。**animyria 不用這支**（lane＋pushq，見下面）。
+   下面是它做的事，Windows 或腳本不適用時照手做：
    1. **不要在共用的 checkout 裡切分支**——別的 session 正在同一個工作區，切了它們會 commit 到你的分支上。
       `<目標>`＝這個 checkout 追的分支（`git rev-parse --abbrev-ref @{u}` 去掉 `origin/`；沒有 upstream 就用
       `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`），不一定是 master——claude-skills 的工作在 `feature/dataviz-tufte-skills`。
@@ -83,10 +93,12 @@ for d in ~/Projects/*/; do [ -d "$d/.git" ] || continue
 done
 ```
 
-正確身分是：
+正確身分寫在 repo 的 `home/claude/config.json`（`git_name` 與 `git_emails` 的第一個，安裝時填的）。
+從這個 skill 的實體位置找，repo 不一定在 `~/.claude/skills`：
 
-```
-bruce <you@example.com>
+```bash
+CFG="$(cd ~/.claude/skills/ship && pwd -P)/../home/claude/config.json"
+jq -r '"\(.git_name) <\(.git_emails[0])>"' "$CFG"
 ```
 
 每個 repo 各自設定，新 clone 的 repo 不會自動帶上。commit 前確認：
@@ -98,8 +110,9 @@ git config user.name; git config user.email
 不對就設 local（**不要設 global 就算了**，要確定這個 repo 是對的）：
 
 ```bash
-git config user.name bruce
-git config user.email you@example.com
+N=$(jq -r '.git_name // empty' "$CFG"); E=$(jq -r '.git_emails[0] // empty' "$CFG")
+[ -n "$N" ] && [ -n "$E" ] && git config user.name "$N" && git config user.email "$E" \
+  || echo "config.json 沒有 git_name／git_emails，不設（重跑 install.sh 補上）"
 ```
 
 commit 完再驗一次：
@@ -154,7 +167,7 @@ git status --short
   這就是被吃掉了，不是你搞錯。用 `git log -1 --format='%h %s' -- <檔案>`
   查它被併進哪一筆，先確認內容完整。
 - **內容完整就不要動它**。那筆已經 push 了，拆開要 force push，而這個 repo
-  **四台機器都有 clone**，而且路徑各不相同：
+  常在好幾台機器都有 clone，而且路徑各不相同（例：作者的四台）：
 
   | 機器 | clone 在哪 |
   |---|---|
@@ -258,7 +271,7 @@ Claude-Session: <當前 session 的 URL>
 
 ## 在 Windows 上多兩件事
 
-**1. 換行。** BRUCEVICTUS 的 `core.autocrlf=true`（實測）：checkout 出來是 CRLF、
+**1. 換行。** Windows 上 git 常是 `core.autocrlf=true`（作者的 BRUCEVICTUS 實測）：checkout 出來是 CRLF、
 commit 回去是 LF，所以正常情況 `git status` 是乾淨的。但看到「整個檔案都被改了」
 的 diff 時**先排除換行再說**：
 
@@ -269,11 +282,11 @@ git diff --ignore-cr-at-eol --stat
 兩邊 stat 差很多就是換行造成的，不要把它 commit 進去——那會讓另一台看到整檔變動。
 
 **2. `git status --short` 之前先確認自己在對的磁碟機。** 從 mac SSH 過去的預設殼層
-是 `cmd.exe`，`cd` 不換磁碟機，要 `cd /d D:\Claude\Projects\<repo>`。
-少了 `/d` 會在 `C:\Users\user` 底下跑 git，回 `not a git repository`。
+是 `cmd.exe`，`cd` 不換磁碟機，要 `cd /d <磁碟機>:\<專案根>\<repo>`。
+少了 `/d` 會在 `%USERPROFILE%` 底下跑 git，回 `not a git repository`。
 
-（GitHub 的認證在那台走 **per-repo deploy key**、七把金鑰七個 Host 別名，
-remote 長 `git@github-<repo>:bruuucechang/<repo>.git`。push 被拒且訊息是
+（例：作者那台的 GitHub 認證走 **per-repo deploy key**、七把金鑰七個 Host 別名，
+remote 長 `git@github-<repo>:<owner>/<repo>.git`。push 被拒且訊息是
 權限相關時，先看 remote 是不是那個別名，見記憶檔 `windows-machine`。）
 
 ---

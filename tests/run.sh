@@ -248,7 +248,9 @@ if [ "$rc" -eq 0 ] && [ "$(head -c3 "$F" | od -An -tx1 | tr -d ' \n')" = efbbbf 
 else
   b "BOM／CRLF 的檔處理不對（rc=${rc}）" "$out"
 fi
-if SETTINGS_FIELDS_FILE="$S/home/claude/settings.json" node "$S/home/claude/tools/settings-fields.mjs" --check >/dev/null 2>&1; then
+if [ ! -f "$S/home/claude/settings.json" ]; then
+  printf '  · 沒有 repo 的 settings.json（公開版），跳過 FIELDS 一致性\n'
+elif SETTINGS_FIELDS_FILE="$S/home/claude/settings.json" node "$S/home/claude/tools/settings-fields.mjs" --check >/dev/null 2>&1; then
   g "FIELDS 跟 repo 的 settings.json 一致"
 else
   b "FIELDS 跟 repo 的 settings.json 對不上（mac 改了值卻沒改表，或反過來）" ""
@@ -265,6 +267,29 @@ if SETTINGS_FIELDS_FILE="$F" node "$S/home/claude/tools/settings-fields.mjs" >/d
   b "壞掉的 JSON 被改寫或回 0" "$(cat "$F")"
 else
   g "壞掉的 JSON：回 1、原檔不動"
+fi
+
+# ── ship-pr／recon-check（ship 5b 與 /recon 的機械步驟，2026-10-21 W3）──────────
+# 假 origin＋假共用 checkout＋假 gh。突變測過：拿掉 --head、失敗不收回 worktree、不檢查搬的途中被改、
+# --merge 不擋髒 worktree、commit 改用 -m、選項缺值、diff.noprefix、--merge 不比對 repo、
+# --merge 不查沒推的 commit／先收 worktree 再合併／不擋非 pr/、push 排在清共用 checkout 之後、壞 symlink 讓快照錯位、
+# 去重用字串比對、不擋 animyria、fetch 失敗不出聲、未追蹤目錄攤開、porcelain 不用 -z、--no-fetch 只認第一個、清單截斷不標，各自都會紅。
+printf '\n  ship-pr／recon-check\n\n'
+for t in ship-pr recon-check; do
+  if out=$( bash "$S/home/bin/test-$t.sh" 2>&1 ); then
+    g "$t 全部通過（$(printf '%s' "$out" | grep -oE '[0-9]+ 過' | tail -1)）"
+  else
+    b "$t 有失敗" "$(printf '%s' "$out" | grep -A1 '✗' | head -6)"
+  fi
+done
+
+# ── handoff-open 開場白預塞資料（2026-10-21 W4）────────────────────────────────
+# 突變測過：拿掉「只注一次」、不比對 pid、不看 clearing 多舊、開場白不附交接單全文，各自都會紅。
+printf '\n  handoff-open 開場白\n\n'
+if out=$( bash "$S/home/bin/test-handoff-open.sh" 2>&1 ); then
+  g "handoff-open 開場白全部通過（$(printf '%s' "$out" | grep -oE '[0-9]+ 過' | tail -1)）"
+else
+  b "handoff-open 開場白有失敗" "$(printf '%s' "$out" | grep -A1 '✗' | head -6)"
 fi
 
 printf '\n  %s 過 · %s 失敗\n\n' "$PASS" "$FAIL"

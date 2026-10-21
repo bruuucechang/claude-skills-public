@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
+import { config } from './config.mjs';
 
 const HOME = homedir();
 
@@ -22,10 +23,11 @@ export function commonDir(dir) {
   try { return real(resolve(dir, git(dir, ['rev-parse', '--git-common-dir'], 2000))); } catch { return null; }
 }
 
-/** 擋直推只管這個帳號的 repo（only-my-own-repos：判準是 remote owner）。GitHub 的 owner 不分大小寫。 */
-export const OWNER = 'bruuucechang';
+/** 擋直推只管這個帳號的 repo（only-my-own-repos：判準是 remote owner）。GitHub 的 owner 不分大小寫。
+ *  帳號讀 config.json 的 github_owner；沒設就是空字串，isMine 永遠 false（等於不擋）。 */
+export const OWNER = String(config().github_owner || '').toLowerCase();
 export const ownerOf = (url) => (url || '').match(/[:/]([^/:]+)\/[^/]+?(?:\.git)?\/?$/)?.[1]?.toLowerCase() ?? null;
-export const isMine = (url) => ownerOf(url) === OWNER;
+export const isMine = (url) => !!OWNER && ownerOf(url) === OWNER;
 
 /** 照 `&&`／`||`／`;`／`|`／換行拆段。引號裡的分隔符號也會被拆——夠用，不是 shell 解析器。 */
 export const segments = (cmd) => cmd.split(/&&|\|\||[;|\n]/);

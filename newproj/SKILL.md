@@ -1,6 +1,6 @@
 ---
 name: newproj
-description: 開新專案。串起 proj new（配埠、登錄、建 private repo）之後它沒做的事——建立前端/後端/資料庫三層骨架與三道守衛（smoke／doc-audit／vitals）、AGENTS.md 正本＋CLAUDE.md 橋接、project-map.json 作業圖、帶 paths: 的 rules、設 local git 身分、修正控制台的登錄表。怎麼跑 scaffold、資料庫從哪來，兩台機器不同，見 macos.md／windows.md。
+description: 開新專案。串起 proj new（配埠、登錄、建 private repo）之後它沒做的事——建立前端/後端/資料庫三層骨架與三道守衛（smoke／doc-audit／vitals）、AGENTS.md 正本＋CLAUDE.md 橋接、project-map.json 作業圖、帶 paths: 的 rules、設 local git 身分、修正控制台的登錄表。怎麼跑 scaffold、資料庫從哪來，mac 與 Windows 不同，見 macos.md／windows.md。沒裝 proj 也能用（開頭有手動做法）。
 ---
 
 # 開新專案
@@ -8,15 +8,29 @@ description: 開新專案。串起 proj new（配埠、登錄、建 private repo
 `proj new` 已經處理掉大部分，但它**沒有**做三件會事後很痛的事：
 建立分層骨架、設 git 作者身分、建 CLAUDE.md。這個 skill 是把整條線走完。
 
+> **沒有 `proj` 時**（`proj` 是作者自己的專案控制台 projctl，選配）：第 1 步改成手動做，其餘照舊。
+>
+> ```bash
+> mkdir -p "${PROJECTS_ROOT:-$HOME/Projects}/<name>" && cd "$_"
+> git init && git commit --allow-empty -m 'init'
+> gh repo create <name> --private --source=. --push
+> # 自己挑兩個沒人用的連號埠（例：5300 起往上找），先確認沒人在聽：
+> lsof -nP -iTCP:5300 -sTCP:LISTEN; lsof -nP -iTCP:5301 -sTCP:LISTEN
+> ~/.claude/skills/newproj/scaffold.sh <name> --web-port 5300 --api-port 5301
+> ```
+>
+> 找不到 `projects.json` 時 scaffold 會自動跳過「修正登錄表」那步；第 5 節整節也跳過。
+> 專案樹不在 `~/Projects` 的話設 `PROJECTS_ROOT`（scaffold 與 `sync-docs` 都讀它）。
+
 **動手前先確定平台**（環境資訊的 `Platform`，或 `uname -s`）：
 
 | 平台 | 專案放哪 | 資料庫哪來 | 讀哪份 |
 |---|---|---|---|
-| macOS | `~/Projects/<name>` | 本機共用的 PostgreSQL（brew 常駐服務） | **[macos.md](macos.md)** |
-| Windows | `D:\Claude\Projects\<name>` | **Docker 容器**（主機上沒有 psql／createdb） | **[windows.md](windows.md)** |
+| macOS | `~/Projects/<name>`（或 `$PROJECTS_ROOT/<name>`） | 本機共用的 PostgreSQL（brew 常駐服務） | **[macos.md](macos.md)** |
+| Windows | 自己定（例：`D:\Claude\Projects\<name>`），scaffold 一定要給 `--dir` | **Docker 容器**（主機上沒有 psql／createdb） | **[windows.md](windows.md)** |
 
-下面是兩台共通的部分：為什麼要這樣做、以及跑完之後要檢查什麼。
-**具體指令一律看平台那一份**，這裡寫的指令會在另一台上失敗。
+下面是兩個平台共通的部分：為什麼要這樣做、以及跑完之後要檢查什麼。
+**具體指令一律看平台那一份**，這裡寫的指令會在另一個平台上失敗。
 
 ---
 
@@ -32,8 +46,8 @@ proj new <name>      # 名稱只能是小寫字母、數字、連字號
 失敗最常見的是建 repo 那步，它會印出手動補的指令：
 `gh repo create <name> --private --source=. --push`。
 
-> 埠位由它分配，**不要自己挑**。撞埠的症狀是「打開網頁看到另一個專案」，
-> 而且兩台都有 IPv4/IPv6 分裂，兩個服務可能都綁得成功、不報 EADDRINUSE。
+> 有 `proj` 的話埠位由它分配，**不要自己挑**。撞埠的症狀是「打開網頁看到另一個專案」，
+> 而且 mac 與 Windows 都可能有 IPv4/IPv6 分裂，兩個服務可能都綁得成功、不報 EADDRINUSE。
 
 ---
 
@@ -151,7 +165,7 @@ proj new <name>      # 名稱只能是小寫字母、數字、連字號
 
 ### 它還會做兩件容易漏的事
 
-1. **建資料庫並套用 `db/schema.sql`** — **怎麼建兩台完全不同**，看平台那一份。
+1. **建資料庫並套用 `db/schema.sql`** — **怎麼建 mac 與 Windows 完全不同**，看平台那一份。
 2. **修正 `projects.json` 那筆** — `proj new` 寫進去的 `start` 是
    `npm run dev`（見 `newproject.mjs:128`），對前後端分離的專案是錯的：
    它只會起前端，後端沒人管。scaffold 會改成 `./run.sh` 並補上 `deps`。
@@ -200,11 +214,13 @@ proj new <name>      # 名稱只能是小寫字母、數字、連字號
 
 **有一批舊 commit 作者是壞的**——主要是主機名假信箱（141 筆），
 `work@example.com` 只有 6 筆，兩種都不會連到 GitHub 帳號（細節與重算指令見 `ship`）。
-新 repo 不會自動帶對的身分：
+新 repo 不會自動帶對的身分。正確身分讀 `~/.claude/skills/home/claude/config.json`
+（`git_name` 與 `git_emails` 的第一個；安裝時填的）：
 
-```
-git config user.name bruce
-git config user.email you@example.com
+```bash
+CFG=~/.claude/skills/home/claude/config.json
+git config user.name  "$(jq -r '.git_name' "$CFG")"
+git config user.email "$(jq -r '.git_emails[0]' "$CFG")"
 git log -1 --format='%an <%ae>'      # 驗證
 ```
 
@@ -230,7 +246,7 @@ scaffold 已經產生一份，裡面**分層規則的部分是完整的**（哪�
 
 ---
 
-## 5. 確認控制台那筆
+## 5. 確認控制台那筆（有 `proj` 才做）
 
 scaffold 已經把 `start` 與 `deps` 改對了。剩下要確認的欄位：
 
@@ -270,5 +286,5 @@ React + Vite，`/health` 回 200 不代表畫面起得來——那是兩件事�
   開始寫真功能時刪掉或改名沿用
 - 專案有自己的重複流程（啟動順序、資料匯入、比較實驗）就放進
   該專案的 `.claude/skills/`，不要每次重講
-- **如果這個專案兩台機器都會開**，在 CLAUDE.md 寫清楚各自的路徑與起法，
+- **如果這個專案不只一台機器會開**，在 CLAUDE.md 寫清楚各自的路徑與起法，
   不要假設另一台跟這台一樣

@@ -42,6 +42,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appendLog } from './lib/log.mjs';
 import { cli, isMain } from './lib/hook-cli.mjs';
+import { config } from './lib/config.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OFF = join(HERE, 'lang-guard.off');
@@ -107,7 +108,7 @@ const REASON = '【自動檢查】剛才的回報以英文為主。照原意用�
 
 /** 回 null＝放行。壞掉的最壞後果必須是「回到沒有這支的狀態」。 */
 export function run(input) {
-  if (existsSync(OFF)) return null;
+  if (existsSync(OFF) || config().language !== 'zh-TW') return null;
   if (!input || input.stop_hook_active) return null;
   if (input.stop_reason && input.stop_reason !== 'end_turn') return null;
   if (/^sdk/i.test(process.env.CLAUDE_CODE_ENTRYPOINT || '')) return null;

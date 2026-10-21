@@ -5,11 +5,11 @@
 # 也可以隨時手動跑：bash ~/.claude/skills/home/claude/tools/rules-audit.sh
 #
 # 檢查的每一項都對應 2026-09-07 那份調查裡的一條共識，見
-# ~/.claude/projects/-Users-bruuucemac/memory/claude-md-context-mechanics.md
+# ~/.claude/projects/<家目錄消毒後的名字>/memory/claude-md-context-mechanics.md
 
 set -uo pipefail
 CLAUDE_HOME="$HOME/.claude/skills/home/claude"
-MEM="$HOME/.claude/projects/-Users-bruuucemac/memory"
+MEM="$HOME/.claude/projects/-$(printf %s "${HOME#/}" | tr / -)/memory"
 PROJ="$HOME/Projects"
 LIMIT=200
 issues=0
