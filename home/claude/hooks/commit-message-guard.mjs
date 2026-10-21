@@ -61,7 +61,7 @@
 import { existsSync } from 'node:fs';
 import { appendLog } from './lib/log.mjs';
 import { expands, gitCalls } from './lib/shell-words.mjs';
-import { cli, isMain } from './lib/hook-cli.mjs';
+import { cli, isMain, tilde } from './lib/hook-cli.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -166,7 +166,7 @@ export function run(input) {
     '',
     '唯一放行的 `-m` 寫法：`-m \'<單引號字串>\'`，裡面沒有 `\\` 也沒有 `$`。',
     '',
-    '（真的需要繞過：`touch ~/.claude/skills/home/claude/hooks/commit-message-guard.off`）',
+    `（真的需要繞過：\`touch ${tilde(join(HERE, 'commit-message-guard.off'))}\`）`,
   ].join('\n');
 
   appendLog(LOG, { at: new Date().toISOString(), sid: String(input?.session_id ?? '').slice(0, 8), flag, cmd: cmd.slice(0, 400) });

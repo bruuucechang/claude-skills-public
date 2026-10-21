@@ -1,6 +1,8 @@
-# 環境診斷 — macOS（這台 MacBook Air）
+# 環境診斷 — macOS
 
-`env-doctor` 的 macOS 半邊。Windows 那台看 [windows.md](windows.md)，**兩邊不通用**。
+`env-doctor` 的 macOS 半邊。Windows 看 [windows.md](windows.md)，**兩邊不通用**。
+
+下面寫「這台」的，指作者那台 MacBook Air（實測來源）；成因與判斷樹在其他 Mac 上一樣成立。
 
 診斷用的指令一律用 curl／CLI，不要開 Chrome 分頁。
 
@@ -34,7 +36,7 @@ done
 **`!` 前綴繞不過去**——它跑在同一個 process 裡，握的是同一份已被拒絕的判定。
 關掉 Claude Code 的 sandbox（`dangerouslyDisableSandbox`）也沒有用，這是 OS 層不是沙箱層。
 
-TCC 的授權對象是**宿主終端機 app**（這台機器是 `/System/Applications/Utilities/Terminal.app`），
+TCC 的授權對象是**宿主終端機 app**（例：`/System/Applications/Utilities/Terminal.app`；用 iTerm 等就是那個 app），
 不是 `claude` 自己。
 
 ### 第三步：如果是 launchd 底下的程序讀不到
@@ -93,7 +95,7 @@ launchd 去開既有檔才失敗——而那時 log 裡還留著上次的正常�
 其他 78 的可能：`ProgramArguments` 第一個元素路徑不存在、`WorkingDirectory` chdir 不了。
 逐項二分測試，每次只改一個 key。
 
-> Windows 那台沒有 launchd，對應的機制是排程工作（`schtasks`），坑完全不同，見 windows.md。
+> Windows 沒有 launchd，對應的機制是排程工作（`schtasks`），坑完全不同，見 windows.md。
 
 ---
 
@@ -141,13 +143,13 @@ curl -s --max-time 2 --unix-socket ~/.docker/run/docker.sock http://localhost/_p
 
 `/usr/local/bin/docker` 曾指向已清除的 AppTranslocation 路徑而失效。
 CLI 的可靠位置是 `/Applications/Docker.app/Contents/Resources/bin`，
-這台機器另外連了一份到 `~/.local/bin/docker`。
+可以自己連一份到 `~/.local/bin/docker`（例：作者那台就是這樣）。
 
 ---
 
 ## 症狀：grep 找不到明明存在的字
 
-**這台機器的 `grep` 會把含中文的檔案當 binary 而靜默跳過整個檔案。一律加 `-a`。**
+**macOS 的 `grep` 會把含中文的檔案當 binary 而靜默跳過整個檔案。一律加 `-a`。**
 
 檔案裡有 NUL byte 時也一樣（曾經有一個 `.ts` 檔因此整支被跳過）。
 
@@ -208,15 +210,15 @@ fi
 **它自己用這個標記做的巢狀 session 判斷不會被拆掉**。
 **放 `.zprofile` 就會連 Bash tool 一起清到**——那個版本會出事。
 
-實測驗證兩條路徑都要跑（`NOQUAD=1` 是為了不讓 quad 掛勾開視窗）：
+實測驗證兩條路徑都要跑（`NOQUAD=1` 是作者 `.zshrc` 的開關，不讓開機排版掛勾開視窗；你沒有就無害）：
 
 ```bash
 CLAUDE_CODE_CHILD_SESSION=1 NOQUAD=1 zsh -i -c 'echo ${CLAUDE_CODE_CHILD_SESSION:-cleared}'  # 要 cleared
 CLAUDE_CODE_CHILD_SESSION=1          zsh -l -c 'echo ${CLAUDE_CODE_CHILD_SESSION:-cleared}'  # 要 1
 ```
 
-清除必須排在 `.zshrc` 的 quad 掛勾**之前**——那裡會直接把 `claude` 跑起來。
-已修（2026-08-06），細節在記憶檔 `claude-code-child-session-leak`。
+清除必須排在 `.zshrc` 裡任何會自動跑 `claude` 的掛勾**之前**（例：作者的 quad 掛勾）。
+作者那台 2026-08-06 修好，細節在他的記憶檔 `claude-code-child-session-leak`。
 
 **通則**：以後要從 claude 裡開 Terminal，用
 `env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID open -a Terminal`。
@@ -231,7 +233,7 @@ CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 claude
 **只對新開的 session 有效**——環境變數在 process 啟動時就定型，救不了已經在跑的那格。
 
 > 這整條是 mac 專屬的：成因是 LaunchServices 把環境塞進 Terminal.app。
-> Windows 那台實測三層（process／User／Machine）都沒有這個變數，見 windows.md。
+> 作者的 Windows 機器實測三層（process／User／Machine）都沒有這個變數，見 windows.md。
 
 ---
 
@@ -245,5 +247,5 @@ CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 claude
 ## 收尾
 
 診斷完如果發現的是新的成因，寫回這一份，並在對應專案的 CLAUDE.md 留一句。
-相關背景在 `~/.claude/memory/` 的 `icloud-documents-eperm`、`projctl`，
-以及 `~/Projects/projctl/CLAUDE.md` 的 TCC 三段。
+相關背景在作者的記憶檔 `icloud-documents-eperm`、`projctl`，
+以及他的 projctl repo 的 `CLAUDE.md` TCC 三段（你沒有就略過）。

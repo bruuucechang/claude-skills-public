@@ -133,7 +133,7 @@ export function run(p) {
     msg = `【這個 repo 有區塊計畫】\`${f}\`：完成 ${done}／剩 ${left}。`
       + (b.file !== f ? `這一塊寫在碎片檔 \`${b.file}\`（狀態與落地紀錄改那個檔，不要改 blocks.md）。` : '')
       + `${doing ? '目前這一塊' : '還沒有進行中的，下一塊是'}：\n\n${body}\n\n`
-      + `一個 session 做一塊，不問使用者直接做。做完跑驗收 → 打勾 → push → 寫交接單 → \`handoff-open\`（回合結束後自己 /clear）接下一塊`
+      + `一個 session 做一塊，不問使用者直接做。做完跑驗收 → 打勾 → push → 寫交接單 → \`handoff-open\`（回合結束後自己 /clear；沒有這個指令就請使用者開新 session）接下一塊`
       + `（不在同一個 session 接著做）。只有重大事件才停下來問，見 blocks skill。`;
   } else {
     msg = `【這個 repo 的區塊計畫已經全部完成】\`${f}\`：${done} 塊全部打勾。`

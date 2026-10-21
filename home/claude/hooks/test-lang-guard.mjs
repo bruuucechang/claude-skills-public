@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // lang-guard 的案例表：node test-lang-guard.mjs（全過離開碼 0）。案例取自近 14 天的真實收尾（replay-p3.mjs lang）。
+import './lib/test-config.mjs';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -37,7 +38,7 @@ const ZH = [
   'Baseline 存好了。等 pre-push。',
   '等 net-view 結果。',
   'mutant 紅了。等模擬器 sweep 跑完（背景）。',
-  'PR 已開（https://github.com/bruuucechang/manga-lore/pull/1），程式碼審查正在背景跑，結果出來後我再決定要不要合併。',
+  'PR 已開（https://github.com/octocat/manga-lore/pull/1），程式碼審查正在背景跑，結果出來後我再決定要不要合併。',
   'test 全過（2154／0 失敗）、check exit 0；現在在背景跑 `./run.sh play`，跑完再 commit。',
   '家目錄裡最大的四塊是 Library 103 GB、code 72 GB、Downloads 45 GB、Pictures 12 GB。我正在往裡面細查是哪些東西占掉的，例如 Docker、Xcode。',
   '改好了，`~/.claude/skills/home/claude/hooks/lang-guard.mjs` 加進 Stop。\n\n```bash\nnode test-lang-guard.mjs && node replay-p3.mjs lang 14 --with a very long english explanation inside the code block that should not count\n```\n\n測試全過。',

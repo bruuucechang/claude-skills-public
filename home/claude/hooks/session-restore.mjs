@@ -9,6 +9,7 @@
  * | `compact` / `resume` | 前文被壓縮或從斷點續 | 這個 session 的 journal 尾段（`TAIL_BYTES`） |
  * | `startup` | 全新 session | 夠新的 `HANDOFF.md`（注完就歸檔） |
  * | `clear` | 使用者主動清空 | **什麼都不注**（他就是要乾淨的） |
+ * | `clear`（handoff-open 打的） | 自動換手 | 那份換手開場白（交接單全文＋recon-check 快照） |
  *
  * ## 為什麼 startup 預設什麼都不注
  *
@@ -23,10 +24,16 @@
  * 看不出來，只會讓第二個 session 從一個已經做完的狀態出發。
  * 歸檔成 `HANDOFF-<時間>.md`，要翻得回去。
  *
+ * ## handoff-open 打的 /clear（2026-10-21 W4）
+ *
+ * 它在打 /clear 前把標記檔（`~/.claude/state/handoff/<時間>.json`）寫上 `clearing`，pid 是這格的 claude。
+ * 同一個 claude 程序、`clearing` 在 `PRELOAD_MIN` 分鐘內、還沒注過（同名 `.preloaded`）→ 注開場白檔全文。
+ * 這樣新 session 打開就有交接單與現況，第一個動作是做事而不是讀檔。
+ *
  * 逃生門：`touch ~/.claude/skills/home/claude/hooks/session-restore.off`
  */
 
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,6 +45,8 @@ const ROOT = join(homedir(), '.claude', 'session-logs');
 
 const TAIL_BYTES = 5 * 1024;
 const HANDOFF_FRESH_MIN = 240;
+const PRELOAD_MIN = 5;
+const PRELOAD_MAX = 9000;
 
 const slugOf = (cwd) => (basename(cwd || 'unknown') || 'unknown').replace(/[^\w.-]/g, '_');
 
@@ -65,6 +74,42 @@ const emit = (text) => ({
   hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text },
 });
 
+// handoff-open 剛替這個 claude 打了 /clear：找它的標記，注開場白（只注一次）
+async function preload() {
+  const dir = join(homedir(), '.claude', 'state', 'handoff');
+  // 先用 mtime 篩（標記目錄不清、幾百個檔），有候選才去找 claude 的 pid（要跑好幾次 ps）（PR #24 審查）
+  const since = Date.now() - PRELOAD_MIN * 60_000;
+  let names;
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith('.json'))
+      .filter((n) => { try { return statSync(join(dir, n)).mtimeMs > since; } catch { return false; } })
+      .sort().reverse();
+  } catch { return null; }
+  if (!names.length) return null;
+  // acct-drain 拉 accounts 進來：只有這條用，動態載入，壞掉也不拖垮 compact／startup（PR #24 審查）
+  const { claudeAncestor } = await import('../tools/acct-drain.mjs');
+  const me = Number(process.env.HANDOFF_CLAUDE_PID) || claudeAncestor();   // HANDOFF_CLAUDE_PID：只給測試用
+  if (!me) return null;
+  for (const n of names) {
+    let m;
+    try { m = JSON.parse(readFileSync(join(dir, n), 'utf8')); } catch { continue; }
+    if (m.pid !== me || !m.clearing || !m.promptFile) continue;
+    if (Date.parse(m.clearing) < since) return null;   // 最新的一份太舊就不用往下找
+    const done = join(dir, n.replace(/\.json$/, '.preloaded'));
+    if (existsSync(done)) return null;
+    let body;
+    try { body = readFileSync(m.promptFile, 'utf8'); } catch { return null; }
+    try { writeFileSync(done, new Date().toISOString()); } catch {}
+    // hook 輸出太長會被 Claude Code 截成預覽：那就只注指示＋檔名，叫它讀檔（PR #24 審查）
+    if (body.length + 200 > PRELOAD_MAX) {   // 200：外面包的那段字
+      return emit(`【自動換手：handoff-open 剛替這格打了 /clear。開場白太長（${body.length} 字）沒有整份注入，`
+        + `先讀 \`${m.promptFile}\`，照它做】`);
+    }
+    return emit(`【自動換手的開場白，handoff-open 剛替這格打了 /clear；原檔 \`${m.promptFile}\`】\n\n${body}`);
+  }
+  return null;
+}
+
 export function run(p) {
   if (existsSync(OFF)) return null;
 
@@ -72,7 +117,7 @@ export function run(p) {
   const cwd = p?.cwd || process.cwd();
   const dir = join(ROOT, slugOf(cwd));
 
-  if (source === 'clear') return null;
+  if (source === 'clear') return preload();
 
   if (source === 'compact' || source === 'resume') {
     const f = join(dir, `${p?.session_id}.md`);

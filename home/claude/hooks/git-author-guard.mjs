@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PreToolUse(Bash) —— git 作者不是 bruuucechang 的有效身分就擋 commit。
+ * PreToolUse(Bash) —— git 作者不是 config.json 的 git_emails 之一就擋 commit（git_emails 空就不檢查）。
  *
  * 2026-10-20 從 settings.json 的 inline shell 搬成 JS（給 dispatch.mjs 呼叫），判斷逐字照舊：
  *   · 指令字串含 `git commit` 才查
@@ -23,9 +23,10 @@ import { statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { cli, isMain } from './lib/hook-cli.mjs';
+import { config } from './lib/config.mjs';
 import { gitCall, head, parse } from './lib/shell-words.mjs';
 
-const OK = ['you@example.com', '262371352+bruuucechang@users.noreply.github.com'];
+const OK = config().git_emails;
 
 /** sed 那一段的 JS 版。回傳要 cd 的路徑字串（原樣，含引號），沒有就 ''。 */
 export function cdTarget(cmd) {
@@ -140,6 +141,7 @@ export function commitTargets(c, base) {
 
 export function run(input) {
   const c = input?.tool_input?.command;
+  if (!OK.length) return null;
   if (typeof c !== 'string' || !/\bgit\b/.test(c) || !c.includes('commit')) return null;
 
   const base = input.cwd || process.cwd();
@@ -161,9 +163,9 @@ export function run(input) {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
       permissionDecisionReason:
-        `這個 repo 的 git ${role}是 "${n} <${e}>"，不是 GitHub 帳號 bruuucechang 底下的任一個有效身分（${OK[0]} 或 ${OK[1]}）。` +
-        '這台機器已經有 134 筆 commit 用主機名推導的假信箱、6 筆用 work@example.com，那些推上去不會掛到帳號、顯示成沒有頭像的匿名作者。' +
-        `先跑：git config user.name bruce && git config user.email ${OK[0]}`,
+        `這個 repo 的 git ${role}是 "${n} <${e}>"，不是 config.json 的 git_emails 裡的任一個（${OK.join(' 或 ')}）。` +
+        '用錯的信箱推上去不會掛到 GitHub 帳號、顯示成沒有頭像的匿名作者。' +
+        `先跑：git config user.name ${JSON.stringify(config().git_name || 'me')} && git config user.email ${OK[0]}`,
     },
   };
 }

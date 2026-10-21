@@ -1,4 +1,0 @@
-# 不要提交任何憑證
-*.key
-*auth-key*
-.DS_Store

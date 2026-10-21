@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "InstructionsLoaded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__REPO__/home/claude/hooks/instructions-log.mjs\"",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__REPO__/home/claude/hooks/dispatch.mjs\" Stop"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__REPO__/home/claude/hooks/dispatch.mjs\" UserPromptSubmit",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__REPO__/home/claude/hooks/dispatch.mjs\" SessionStart",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|AskUserQuestion|Agent|Task|mcp__claude-in-chrome__browser_batch)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__REPO__/home/claude/hooks/dispatch.mjs\" PreToolUse",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // focus-guard.mjs 的案例表：node test-focus-guard.mjs（全過離開碼 0）
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -48,7 +48,9 @@ const cases = [
 ];
 
 // focus-guard.log 每一筆歷史擋下，逐筆標過該擋／誤擋（全文從 transcript 找回，log 只存前 400 字）
-const history = JSON.parse(readFileSync(join(dirname(HOOK), 'test-focus-guard.history.json'), 'utf8'));
+// 公開版沒有這份（是真實指令的片段），缺了就只跑上面的案例
+const HIST = join(dirname(HOOK), 'test-focus-guard.history.json');
+const history = existsSync(HIST) ? JSON.parse(readFileSync(HIST, 'utf8')) : [];
 for (const h of history) cases.push([h.block, h.cmd, h.note]);
 
 let fail = 0;

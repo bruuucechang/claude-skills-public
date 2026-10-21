@@ -12,7 +12,7 @@
 | 流程 | 改走 PR＋自動審查（不做定時巡檢、不是只審不開 PR） |
 | 誰合併 | agent 自己合併——**常設授權**，取代「開 PR 沒有授權」。審查通過就合併；擋兩輪後 agent 裁定（見下面「被擋下」），一樣不留給使用者 |
 | 審查在哪跑 | 本機 agent 自己審（`/code-review`），不放 GitHub Actions、不額外花 API 錢 |
-| 哪些 repo | 所有 `bruuucechang` 底下、未封存的 repo（判準是 remote owner，見 only-my-own-repos） |
+| 哪些 repo | 所有自己帳號（`config.json` 的 `github_owner`）底下、未封存的 repo（判準是 remote owner，見 only-my-own-repos） |
 | 被擋下 | agent 自己修、重審。~~最多兩輪、還不過就留給使用者~~ → **2026-10-21 改：PR 不留給使用者按，agent 自己處理到合併**（原話：「PR不要讓我自己按好了 你來處理 但不要影響github規章」） |
 | 小改動 | 只有程式碼走 PR；diff 只動文件類就照舊直推 |
 
@@ -71,8 +71,8 @@
   - M5 Pro 上的逃生門是 `touch ~/.profiles/bruce/claude-skills/home/claude/hooks/pr-guard.off`（`pr-guard.off` 跟著 clone 走），
     擋下時訊息裡寫的 `~/.claude/skills/…` 在那台不對。
   - `~/.gitconfig` 是 manibari 和 bruce 兩個 profile 共用的，所以 manibari 那邊推的時候也會跑這支 hook。可以接受，因為
-    這次推的 remote 網址 owner 不是 bruuucechang 就放行，任何例外也一律放行。例外：manibari 有 remote 指到 bruuucechang 的 repo 的話會被擋。
-  - 驗收：`git config --global --get hook.pr-guard.command` 有值，然後在暫存目錄開一個假 remote `<tmp>/bruuucechang/x.git`。
+    這次推的 remote 網址 owner 不是 `github_owner` 就放行，任何例外也一律放行。例外：manibari 有 remote 指到 `github_owner` 的 repo 的話會被擋。
+  - 驗收：`git config --global --get hook.pr-guard.command` 有值，然後在暫存目錄開一個假 remote `<tmp>/<github_owner>/x.git`。
     下面的「人推」一律寫成 `env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CODEX_THREAD_ID git push …`
     （agent 的 shell 本來就帶這些變數）；「agent 推」帶 `CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=t`。
     1. 人推一個只有 `README.md` 的 init 到 master 和 `pr/x`（遠端分支先存在，不然新分支會直接放行，什麼都沒驗到）。
@@ -92,4 +92,4 @@
 1. 在一個自己的 repo 做一個小的程式碼改動 → 跑 `/ship` → 看到 PR 開出、審查留言貼上、自動 squash 合併、遠端分支被刪。
    `gh pr list --state merged --limit 1` 看得到。
 2. 只改 `.md` 的提交 → 直推 master，沒有開 PR。
-3. 所有自己的 repo：`gh api repos/bruuucechang/<repo> --jq .delete_branch_on_merge` 全是 `true`。
+3. 所有自己的 repo：`gh api repos/$(gh api user -q .login)/<repo> --jq .delete_branch_on_merge` 全是 `true`。

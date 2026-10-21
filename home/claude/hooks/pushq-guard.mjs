@@ -31,7 +31,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appendLog } from './lib/log.mjs';
-import { cli, isMain } from './lib/hook-cli.mjs';
+import { cli, isMain, tilde } from './lib/hook-cli.mjs';
 import { commonDir, hasNoVerify, pushSegments, real, repoDirs, stripData } from './lib/shell-git.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -80,7 +80,7 @@ export function run(input) {
         '它立刻返回，排進去就可以交接；佇列會合併最新的 ' + br + '、跑守衛與測試、推上去，失敗交給空白 session 修。',
         '進度：pushq status ' + name + '　規格：~/.claude/skills/handoff/push-queue-spec.md',
         '',
-        '（使用者真的要繞過：`touch ~/.claude/skills/home/claude/hooks/pushq-guard.off`）',
+        `（使用者真的要繞過：\`touch ${tilde(join(HERE, 'pushq-guard.off'))}\`）`,
       ].join('\n'),
     },
   };

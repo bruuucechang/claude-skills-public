@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // git-author-guard.mjs 的案例表：node test-git-author-guard.mjs（全過離開碼 0）
 // 暫存目錄開兩個 repo（作者對／錯），全域設定指到空檔，不讀這台真的 ~/.gitconfig。
+import './lib/test-config.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,7 +14,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1';
 writeFileSync(process.env.GIT_CONFIG_GLOBAL, '');
 const { run } = await import('./git-author-guard.mjs');
 
-const OK_MAIL = 'you@example.com';
+const OK_MAIL = 'octo@example.com';
 function repo(name, email, remote = true) {
   const d = join(root, name).replace(/\\/g, '/');
   mkdirSync(d);
@@ -21,7 +22,7 @@ function repo(name, email, remote = true) {
   execFileSync('git', ['-C', d, 'config', 'user.name', 'bruce']);
   execFileSync('git', ['-C', d, 'config', 'user.email', email]);
   // 有 GitHub remote：暫存目錄裡沒有 remote 的 repo 會被當成測試用假 repo 不查
-  if (remote) execFileSync('git', ['-C', d, 'remote', 'add', 'origin', 'https://github.com/bruuucechang/x.git']);
+  if (remote) execFileSync('git', ['-C', d, 'remote', 'add', 'origin', 'https://github.com/octocat/x.git']);
   return d;
 }
 const good = repo('good', OK_MAIL);

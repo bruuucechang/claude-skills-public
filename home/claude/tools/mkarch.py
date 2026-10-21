@@ -74,7 +74,7 @@ def L(p):
 def nums():
     import json
     st = json.loads((CH / "settings.json").read_text(encoding="utf-8"))
-    mem = HOME / ".claude" / "projects" / "-Users-bruuucemac" / "memory"
+    mem = HOME / ".claude" / "projects" / ("-" + str(HOME).lstrip("/").replace("/", "-")) / "memory"
     ex = max((PROJ.glob("*/docs/notebook.md")), key=L, default=None)
     return {
         "g_claude":  L(CH / "CLAUDE.md"),

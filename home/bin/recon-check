@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# recon-check — /recon 那幾行一次跑完、印成一頁（2026-10-21 W3）。
+#
+#   recon-check [--no-fetch] [<要碰的檔…>]      （--no-fetch 放哪都可以）
+#
+# 印：分支與 upstream、fetch 結果、ahead／behind（behind 時列出 origin 多的 commit，碰到要碰的檔的標出來）、
+# 要碰的檔各自的狀態與 mtime、其餘未 commit 的檔（不是你的就別碰、別 add）、最近 5 個 commit。
+# 判讀（要不要 pull、哪些是自己的）仍由 agent 做；這支只負責不漏看。
+# exit：0＝跑完（不管髒不髒）；1＝fetch 失敗或 ahead/behind 算不出來（數字不能信）；2＝不是 repo
+set -uo pipefail
+
+FETCH=1 ARGS=()
+for a in "$@"; do [ "$a" = --no-fetch ] && FETCH=0 || ARGS+=("$a"); done
+TOP=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "recon-check: 這裡不是 git repo" >&2; exit 2; }
+TOP=$(cd "$TOP" && pwd -P)
+G(){ git -C "$TOP" -c core.quotepath=off "$@"; }
+
+# 要碰的檔 → 相對 repo 根（跟 ship-pr 同一套：相對 cwd、絕對、經過 symlink 都可以）
+MINE=()
+for a in ${ARGS[@]+"${ARGS[@]}"}; do
+  # 所在目錄還不存在（要新建的檔）：照字面相對 cwd 正規化
+  if d=$(cd "$(dirname "$a")" 2>/dev/null && pwd -P); then p="$d/$(basename "$a")"
+  else p=$(python3 -c 'import os,sys; print(os.path.normpath(os.path.join(os.getcwd(), sys.argv[1])))' "$a"); fi
+  case "$p" in "$TOP"/*) MINE+=("${p#"$TOP"/}") ;; *) echo "recon-check: 不在這個 repo 裡：$a" >&2; exit 2 ;; esac
+done
+
+BR=$(G rev-parse --abbrev-ref HEAD)
+UP=$(G rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+echo "repo   $TOP"
+echo "分支   $BR${UP:+ → $UP}"
+
+RC=0
+if [ "$FETCH" = 1 ]; then
+  if err=$(G fetch -q origin 2>&1); then echo "fetch  ok"
+  else echo "fetch  ✗ 失敗——下面的 ahead/behind 是上次 fetch 的，不能信：$(printf '%s' "$err" | head -1)"; RC=1; fi
+else
+  echo "fetch  略過（--no-fetch）"
+fi
+
+if [ -n "$UP" ]; then
+  # rev-list 失敗（upstream 不見、沒有共同祖先）不能讓 set -u 把整份報告炸掉
+  if c=$(G rev-list --left-right --count "HEAD...$UP" 2>/dev/null) && [ -n "$c" ]; then set -- $c
+  else echo "ahead/behind  ✗ 算不出來（$UP 不見了或沒有共同祖先）"; RC=1; set -- 0 0; fi
+  echo "ahead $1 · behind $2"
+  if [ "$2" -gt 0 ]; then
+    echo "  origin 有、這裡沒有的："
+    G log --format='    %h %s' "HEAD..$UP" | head -10; [ "$2" -gt 10 ] && echo "    …還有 $(($2-10)) 筆（下面「碰到要碰的檔」是全部掃過的）"
+    if [ ${#MINE[@]} -gt 0 ]; then
+      hit=$(G log --format='    %h %s' "HEAD..$UP" -- "${MINE[@]}")
+      [ -n "$hit" ] && printf '  ⚠ 其中碰到你要碰的檔（先同步再開工）：\n%s\n' "$hit"
+    fi
+  fi
+  [ "$1" -gt 0 ] && { echo "  這裡有、origin 沒有的（不一定是你的，別替別人推）："; G log --format='    %h %an %s' "$UP..HEAD" | head -10; [ "$1" -gt 10 ] && echo "    …還有 $(($1-10)) 筆"; }
+else
+  echo "ahead/behind  沒有 upstream，無從比"
+fi
+
+# porcelain 的路徑相對 repo 根。未追蹤目錄收成一行（-uall 會把 .trash/ 這種攤成幾百行，真正要看的被淹掉）；
+# 要碰的檔逐一用 -uall 問，才看得到未追蹤目錄裡的檔
+# 一律用 -z：沒有 -z 時改名印成「old -> new」、帶空白的路徑加引號，跟要碰的檔永遠比不上
+# 印「XY 路徑」，改名的在後面接「（原 old）」；比對用的路徑是第二欄
+st(){ G status --porcelain -z "$@" | while IFS= read -r -d '' e; do
+  xy=${e:0:2} f=${e:3} o=
+  [[ "$xy" == R* || "$xy" == C* ]] && IFS= read -r -d '' o
+  printf '%s\t%s\t%s\n' "$xy" "$f" "$o"
+done; }
+STATUS=$(st)
+if [ ${#MINE[@]} -gt 0 ]; then
+  echo "要碰的檔："
+  for f in "${MINE[@]}"; do
+    s=$(st --untracked-files=all -- "$f" | awk -F'\t' -v f="$f" '$2==f{print $1}')
+    if [ -e "$TOP/$f" ]; then m=$(date -r "$TOP/$f" '+%m-%d %H:%M' 2>/dev/null || stat -c %y "$TOP/$f" | cut -c6-16)
+    else m="（不存在）"; fi
+    printf '  %-2s %s  %s%s\n' "${s:-··}" "$m" "$f" "${s:+  ← 已經有未 commit 的改動：是你剛改的，還是別人在動？}"
+  done
+fi
+show(){ printf '  %s %s%s\n' "$1" "$2" "${3:+（原 $3）}"; }
+OTHERS=$(printf '%s\n' "$STATUS" | awk 'NF' | while IFS=$'\t' read -r xy f o; do
+  skip=0
+  for m in ${MINE[@]+"${MINE[@]}"}; do
+    [ "$f" = "$m" ] && skip=1
+    # 收成一行的未追蹤目錄裡有要碰的檔：攤開那一個目錄，只列不是要碰的
+    # （bash 3.2 解析不了 $( ) 裡的 case，用 [[ ]]）
+    [[ "$f" == */ && "$m" == "$f"* ]] && skip=2
+  done
+  if [ "$skip" = 2 ]; then
+    st --untracked-files=all -- "$f" | while IFS=$'\t' read -r xy2 f2 o2; do
+      s2=0; for m in "${MINE[@]}"; do [ "$f2" = "$m" ] && s2=1; done
+      [ "$s2" = 0 ] && show "$xy2" "$f2" "$o2"
+    done
+  elif [ "$skip" = 0 ]; then show "$xy" "$f" "$o"; fi
+done)
+if [ -n "$OTHERS" ]; then
+  echo "其他未 commit 的檔（不是你的就別碰、別 add）："
+  printf '%s\n' "$OTHERS" | head -30
+  n=$(printf '%s\n' "$OTHERS" | wc -l | tr -d ' '); [ "$n" -gt 30 ] && echo "  …還有 $((n-30)) 行（git status --short 看全部）"
+else echo "其他未 commit 的檔：沒有"; fi
+
+echo "最近 commit："
+G log --format='  %h %ar %s' -5
+exit $RC

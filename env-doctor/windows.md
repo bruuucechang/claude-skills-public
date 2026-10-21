@@ -1,17 +1,18 @@
-# 環境診斷 — Windows（BRUCEVICTUS）
+# 環境診斷 — Windows
 
-`env-doctor` 的 Windows 半邊。mac 那台看 [macos.md](macos.md)，**兩邊不通用**。
+`env-doctor` 的 Windows 半邊。mac 看 [macos.md](macos.md)，**兩邊不通用**。
 
-這台的基本事實（2026-08-16 實測）：
+下面寫「這台」的，指作者的一台 Windows 11 家用版（實測來源）。版本、碼頁、路徑換成你自己的；
+坑本身在其他 PowerShell 5.1 的 Windows 上大多一樣。例：那台的基本事實（2026-08-16 實測）：
 
 | | |
 |---|---|
 | 殼層 | **Windows PowerShell 5.1**（26100.9168），**不是** PowerShell 7 |
 | 主控台碼頁 | `chcp` = **950**，`[Console]::OutputEncoding` = **big5** |
-| 家目錄 | `C:\Users\user` |
-| skills repo | `C:\Users\user\.claude\skills`（**實體目錄**，repo 本體就在這裡） |
-| 專案 | `D:\Claude\Projects\`（interior-designer、loan-ledger、namecard-archive、News、palrogue、palworld-data、projctl） |
-| claude / proj | `C:\Users\user\.local\bin\claude.exe`、`...\proj.cmd` |
+| 家目錄 | `$env:USERPROFILE`（例：`C:\Users\user`） |
+| skills repo | `$env:USERPROFILE\.claude\skills`（**實體目錄**，repo 本體就在這裡） |
+| 專案 | 自己定（例：`D:\Claude\Projects\`） |
+| claude / proj | `$env:USERPROFILE\.local\bin\claude.exe`、`...\proj.cmd`（proj 選配） |
 
 ---
 
@@ -98,11 +99,11 @@ chcp 65001 > $null; [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 
 實測 `%COMSPEC%` = `C:\WINDOWS\system32\cmd.exe`。兩個立刻會咬人的差異：
 
-- **`cd` 不會換磁碟機。** `ssh user@... 'cd D:\Claude\Projects\News && git log'` 會在
-  `C:\Users\user` 底下跑 git，回一句 `not a git repository`——**看起來像 repo 不見了**。
+- **`cd` 不會換磁碟機。** `ssh <你的 Windows 主機> 'cd D:\Projects\<repo> && git log'` 會在
+  `%USERPROFILE%` 底下跑 git，回一句 `not a git repository`——**看起來像 repo 不見了**。
   要寫 **`cd /d D:\...`**（實測加了就正常）。
 - **`&&` 可以用，`;` 不行**；要用 PowerShell 的語法就整段包起來：
-  `ssh user@... 'powershell -NoProfile -Command "..."'`。指令複雜到需要引號巢狀時，
+  `ssh <你的 Windows 主機> 'powershell -NoProfile -Command "..."'`。指令複雜到需要引號巢狀時，
   **寫成 `.ps1` 用 `scp` 傳過去再 `powershell -File` 跑**，比在引號裡搏鬥快得多
   （這份文件裡的實測數據就是這樣拿到的）。
 
@@ -199,15 +200,15 @@ icacls "$env:USERPROFILE\.claude\skills" /setowner "$env:USERNAME" /T /C
 走排程工作：
 
 ```powershell
-schtasks /create /tn t1 /tr "powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\x.ps1" /sc once /st 00:00 /ru user /it /f
+schtasks /create /tn t1 /tr "powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\x.ps1" /sc once /st 00:00 /ru $env:USERNAME /it /f
 schtasks /run /tn t1
 ```
 
-`/ru user /it` 是關鍵，`/it` 才會跑在互動 session。**腳本要自己寫 log 檔回報結果**，
+`/ru <使用者> /it` 是關鍵，`/it` 才會跑在互動 session。**腳本要自己寫 log 檔回報結果**，
 排程工作的 stdout 沒地方去。**用完記得 `schtasks /delete /tn t1 /f`**。
 
 **看得到畫面**：讓那支腳本自己截圖，再從 mac `scp` 回來看（2026-08-16 實測有效，
-四宮格那輪就是這樣驗的）。這比 Chrome 遠端桌面快，而且不必有人坐在那台前面：
+作者驗終端機排版那輪就是這樣做的）。這比 Chrome 遠端桌面快，而且不必有人坐在那台前面：
 
 ```powershell
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -215,7 +216,7 @@ $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-$bmp.Save("C:\Users\user\shot.png", [System.Drawing.Imaging.ImageFormat]::Png)
+$bmp.Save("$env:USERPROFILE\shot.png", [System.Drawing.Imaging.ImageFormat]::Png)
 ```
 
 **排程跑的 `.ps1` 寫成純 ASCII。** 無 BOM 的 UTF-8 檔案裡只要有中文，PowerShell 5.1
@@ -260,7 +261,7 @@ $env:VAR                                                  # process（含繼承�
 
 ## 症狀：Claude Code 的畫面文字重疊、排序錯亂、中間穿插奇怪文字
 
-**先看掛勾，不要先懷疑終端機。** 2026-08-17 兩台 Windows 都有這個症狀，
+**先看掛勾，不要先懷疑終端機。** 2026-08-17 作者的兩台 Windows 都有這個症狀，
 成因是 `settings.json` 的掛勾是 **POSIX shell** 寫的，而
 **Windows 上 Claude Code 是用 PowerShell 5.1 跑掛勾**：
 
@@ -276,7 +277,7 @@ mac 不中，因為 zsh 看得懂那些語法——所以這是「同一份設�
 家用版症狀一模一樣，兩台都是 PowerShell 5.1）。
 
 **更該在意的是它安靜的那一面**：剖析失敗的掛勾等於沒有掛勾——
-作者身分守門在兩台 Windows 上從來沒生效過，SessionStart 的行為約定也從來沒送達過。
+作者身分守門在那兩台 Windows 上從來沒生效過，SessionStart 的行為約定也從來沒送達過。
 
 修法與可直接用的 PowerShell 版本在 `~/.claude/skills/home/claude/hooks/`。
 改掛勾之前先驗語法：
@@ -294,5 +295,5 @@ $e=$null; [void][System.Management.Automation.Language.Parser]::ParseInput('<指
 ## 收尾
 
 診斷完如果發現的是新的成因，寫回這一份（只有兩台都成立才寫進 SKILL.md）。
-相關記憶檔：`~\.claude\memory\windows-machine.md`（SSH 怎麼接起來的、deploy key、
-遠端桌面的鍵盤限制）、`projctl.md`（`proj` 在這台的位置與埠位對照表）。
+相關背景在作者的記憶檔 `windows-machine.md`（SSH 怎麼接起來的、deploy key、
+遠端桌面的鍵盤限制）、`projctl.md`（`proj` 的位置與埠位對照表）；你沒有就略過。

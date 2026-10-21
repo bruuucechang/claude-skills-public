@@ -38,7 +38,7 @@
 
 import { existsSync } from 'node:fs';
 import { appendLog } from './lib/log.mjs';
-import { cli, isMain } from './lib/hook-cli.mjs';
+import { cli, isMain, tilde } from './lib/hook-cli.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -151,12 +151,12 @@ export function run(input) {
     '',
     '使用者裁示（2026-10-11）：所有 session 工作時一律在背景跑，**連交付預覽也是背景開、回報裡說一聲**。',
     '改用：',
-    '    開檔案／網址       ~/.claude/skills/home/claude/tools/bgopen <檔案或網址>',
-    '    會開視窗的程式     ~/.claude/skills/home/claude/tools/bgrun <指令…>',
+    `    開檔案／網址       ${tilde(join(HERE, '..', 'tools', 'bgopen'))} <檔案或網址>`,
+    `    會開視窗的程式     ${tilde(join(HERE, '..', 'tools', 'bgrun'))} <指令…>`,
     '    專案網頁           proj open <名>（agent 呼叫時自動走背景）',
     '    Codex             codex-drive（只跑 tmux，不開 Terminal 視窗）',
     '',
-    '（真的需要繞過：`touch ~/.claude/skills/home/claude/hooks/focus-guard.off`）',
+    `（真的需要繞過：\`touch ${tilde(join(HERE, 'focus-guard.off'))}\`）`,
   ].join('\n');
 
   if (!process.env.FOCUS_GUARD_NOLOG) appendLog(LOG, { at: new Date().toISOString(), problems, cmd: cmd.slice(0, 400) });

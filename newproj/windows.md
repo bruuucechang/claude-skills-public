@@ -1,12 +1,15 @@
-# 開新專案 — Windows（BRUCEVICTUS）
+# 開新專案 — Windows
 
-`newproj` 的 Windows 半邊。共通的部分在 [SKILL.md](SKILL.md)，mac 那台看 [macos.md](macos.md)，
+`newproj` 的 Windows 半邊。共通的部分在 [SKILL.md](SKILL.md)，mac 看 [macos.md](macos.md)，
 **指令不通用**。
+
+下面的事實取自作者的一台 Windows 機器（下稱「這台」，2026-08 實測）；路徑換成你自己的，
+坑本身在其他 Windows 機器上大多一樣。
 
 | | |
 |---|---|
-| 專案根 | `D:\Claude\Projects\<name>` |
-| `proj` | `C:\Users\user\.local\bin\proj.cmd`（projctl 在 `D:\Claude\Projects\projctl`） |
+| 專案根 | 自己定（例：`D:\Claude\Projects\<name>`；下面用 `<專案根>` 代稱） |
+| `proj` | 選配（例：`$env:USERPROFILE\.local\bin\proj.cmd`）。沒有就照 SKILL.md 開頭的手動做法，scaffold 加 `--web-port`／`--api-port` |
 | Python | 3.11.9（`...\WindowsApps\python.exe`），**沒有 `py` 啟動器** |
 | 資料庫 | **Docker 容器**（例如 `interiordesign-db-1` = `postgres:17-alpine`）。主機上**沒有 `psql`／`createdb`** |
 
@@ -17,7 +20,7 @@
 ```powershell
 proj new <name>
 & "C:\Program Files\Git\bin\bash.exe" "$env:USERPROFILE\.claude\skills\newproj\scaffold.sh" `
-    <name> --dir D:\Claude\Projects\<name> --no-createdb
+    <name> --dir <專案根>\<name> --no-createdb
 ```
 
 **2026-08-16 實測**：這樣跑得起來，exit 0，產出 33 個檔案，三層目錄與 `run.sh`、
@@ -33,8 +36,8 @@ proj new <name>
    直接執行會讓 shebang 帶著 `\r` 而報 bad interpreter；把它當參數餵給 bash 就沒事。
 3. **一定要加 `--no-createdb`。** 這台沒有 `createdb`。（腳本自己也會偵測到並跳過，
    明著寫是為了讓輸出裡不要出現看起來像失敗的提示。）
-4. **`--dir` 一定要給。** 預設值是 `~/Projects/<name>`，在這台會跑到 `C:\Users\user\Projects`，
-   不是 `D:\Claude\Projects`。
+4. **`--dir` 一定要給**（或設 `PROJECTS_ROOT`）。預設值是 `~/Projects/<name>`，在 Git Bash 裡會跑到
+   `%USERPROFILE%\Projects`，不一定是你放專案的地方。
 
 ## 產出的 `run.sh` 已經兩邊通用（2026-08-16 修的）
 
@@ -58,13 +61,13 @@ if [ -d "$VENV/Scripts" ]; then VBIN="$VENV/Scripts"; else VBIN="$VENV/bin"; fi
 **要手動起（除錯時比較好看到錯誤）**：
 
 ```powershell
-cd D:\Claude\Projects\<name>\backend
+cd <專案根>\<name>\backend
 python -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 .\.venv\Scripts\uvicorn app.main:app --reload --port <api_port>
 
 # 另一個視窗
-cd D:\Claude\Projects\<name>\frontend
+cd <專案根>\<name>\frontend
 npm install
 npm run dev -- --port <web_port> --strictPort
 ```

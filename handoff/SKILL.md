@@ -11,7 +11,7 @@ description: 寫交接單：使用者說「/handoff」「寫交接」「換帳�
 ## 放哪
 
 - 一律放 `$SCRATCHPAD/handoff/<主題-kebab>.md`（session 的 scratchpad 目錄）；blocks 收一塊也寫在這裡。
-  不再另寫 `~/.claude/session-logs/<專案>/HANDOFF.md`：自動換手走 /clear，`session-restore` 在 clear 模式不注入它（2026-10-21 統一）。
+  不再另寫 `~/.claude/session-logs/<專案>/HANDOFF.md`：自動換手走 /clear，`session-restore` 在 clear 模式不注入它（2026-10-21 統一）；clear 時只注 handoff-open 組的開場白（見下面）。
 - 寫完把**絕對路徑**告訴使用者——下一個 session 的開場就是「讀 <路徑>，照下一步做」。
 
 ## 格式（照順序，缺的寫「無」不要省略標題）
@@ -62,9 +62,14 @@ handoff-open --dry <交接單>                         # 只印出會做什麼�
 它做的事（`~/.claude/skills/home/bin/handoff-open`，規格在 `clear-spec.md`）：
 1. 寫標記與開場白到 `~/.claude/state/handoff/`，起一支脫離的背景程序（`--inject`），立刻返回。
 2. 背景程序等這格的 pane-state 變成 `done`（回合結束）且那格連續 3 秒沒輸出，
-   對**同一格**打 `/clear` → 等 3 秒 → 打「讀 <開場白> 照做」。送出靠 `ESC[13u`，不搶焦點。
-3. 清完的 session 讀交接單 → /recon → **直接照「下一步」做下去**；只有重大事件才停（定義在 `blocks` skill）。
-4. 結果記在標記檔：`cleared`／`prompted`／`started`，失敗寫 `gaveUp`（等 10 分鐘回合沒結束就放棄、不打字）、
+   先重組開場白（交接單全文＋`recon-check` 快照，打字前一刻才跑），標記寫 `clearing`，
+   對**同一格**打 `/clear` → 等 3 秒 → 打「照開場資料裡的換手開場白做」。送出靠 `ESC[13u`，不搶焦點。
+3. `/clear` 觸發的 SessionStart 由 `session-restore` 認出這是 handoff-open 打的（同一個 claude、`clearing` 5 分鐘內、
+   還沒有 `.preloaded`），把開場白全文注進去（2026-10-21 W4）。清完的 session 一開場就有交接單與現況，
+   **不用再讀檔、不用再 /recon，直接照「下一步」做下去**；只有重大事件才停（定義在 `blocks` skill）。
+   換帳號（switch）把開場白檔整份當第一句話帶進去，同樣含全文與快照；切新格（split）沒有 `--inject`、舊 session 之後還會動，
+   只附全文不附快照，照舊叫新 session 跑 /recon。開場白超過約 9000 字 hook 只注檔名，叫它讀檔。
+4. 結果記在標記檔：`clearing`（打 /clear 前寫、開場白打進去就收回，session-restore 認它）／`cleared`／`prompted`／`started`，失敗寫 `gaveUp`（等 10 分鐘回合沒結束就放棄、不打字）、
    送出後沒開工寫 `unconfirmed`；AppleScript 撞到 `-1719 Invalid index`（別格剛好開關）會重試 3 次。背景程序的輸出在同名 `.log`。
 5. **失敗會叫**：launchd 的 `handoff-watch`（每分鐘）讀標記檔，`gaveUp`／`unconfirmed`／背景程序死掉沒留結果
    → 推通知（5391/notify＋系統通知，不搶焦點），每個標記只叫一次。

@@ -42,6 +42,7 @@ import { execFileSync } from 'node:child_process';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { config } from './lib/config.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cli, isMain } from './lib/hook-cli.mjs';
@@ -63,8 +64,8 @@ const LOCK_STALE_MS = 30 * 60 * 1000;
 
 const PROJECTS = process.env.UPDATE_CHECK_PROJECTS || join(homedir(), 'Projects');
 const BREW = process.env.UPDATE_CHECK_BREW || '/opt/homebrew/bin/brew';
-/** 只有這個 owner 的 repo 才查，見 [[only-my-own-repos]]。 */
-const OWNER = 'bruuucechang';
+/** 只有這個 owner 的 repo 才查，見 [[only-my-own-repos]]。讀 config.json 的 github_owner，沒設就不查任何 repo。 */
+const OWNER = config().github_owner;
 /** brew 過期清單裡點名這幾個——天天在用，落後會真的咬到人。 */
 const NOTABLE = ['git', 'node', 'gh', 'jq', 'python@3.14', 'postgresql@17', 'ollama', 'ffmpeg'];
 
@@ -132,8 +133,8 @@ function checkRepos() {
 
     const url = sh('git', ['-C', dir, 'remote', 'get-url', 'origin'], { timeout: 15_000 });
     if (!url) continue;
-    // 只認 bruuucechang 底下的，別人的 repo 不歸我管也不該被我 fetch。
-    if (!new RegExp(`[:/]${OWNER}/`).test(url)) continue;
+    // 只認 github_owner 底下的，別人的 repo 不歸我管也不該被我 fetch。
+    if (!OWNER || !new RegExp(`[:/]${OWNER}/`, 'i').test(url)) continue;
 
     if (sh('git', ['-C', dir, 'fetch', '--quiet', 'origin'], { timeout: 90_000 }) === null) continue;
     const n = sh('git', ['-C', dir, 'rev-list', '--count', 'HEAD..@{u}'], { timeout: 15_000 });

@@ -13,7 +13,7 @@
 # 用法：
 #   scaffold.sh <name> [選項]
 #
-#   --dir <path>       專案目錄（預設 ~/Projects/<name>）
+#   --dir <path>       專案目錄（預設 $PROJECTS_ROOT/<name>，PROJECTS_ROOT 沒設就是 ~/Projects）
 #   --web-port <n>     前端埠（預設從 projects.json 讀 proj new 配好的）
 #   --api-port <n>     後端埠（同上）
 #   --db <name>        資料庫名（預設把專案名的連字號換成底線）
@@ -24,9 +24,15 @@
 #
 set -euo pipefail
 
-PROJECTS_ROOT="$HOME/Projects"
-REGISTRY="$PROJECTS_ROOT/projctl/projects.json"
-[ -f "$REGISTRY" ] || REGISTRY="$PROJECTS_ROOT/.projctl/projects.json"   # 2026-10-01 前的舊名
+# 環境變數可覆寫：PROJECTS_ROOT（專案樹）、PROJ_REGISTRY（proj 的 projects.json）。
+# 沒裝 proj 的話登錄表不存在，相關步驟會自動跳過，埠位要用 --web-port／--api-port 給。
+PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/Projects}"
+if [ -n "${PROJ_REGISTRY:-}" ]; then
+  REGISTRY="$PROJ_REGISTRY"
+else
+  REGISTRY="$PROJECTS_ROOT/projctl/projects.json"
+  [ -f "$REGISTRY" ] || REGISTRY="$PROJECTS_ROOT/.projctl/projects.json"   # 2026-10-01 前的舊名
+fi
 
 NAME=""; DIR=""; WEB_PORT=""; API_PORT=""; DB=""
 WITH_FRONTEND=1; WITH_DB=1; WITH_REGISTRY=1; WITH_CREATEDB=1
@@ -79,7 +85,7 @@ fi
 if [ -z "${WEB_PORT:-}" ] || [ -z "${API_PORT:-}" ]; then
   # 變數後面緊接中文標點時一定要加大括號：這個 bash 會把多位元組字元的
   # 位元組當成變數名的一部分，於是 set -u 報 "unbound variable"。
-  echo "找不到埠位。先跑 proj new ${NAME}，或用 --web-port / --api-port 指定。" >&2
+  echo "找不到埠位。先跑 proj new ${NAME}，或（沒有 proj 時）用 --web-port / --api-port 指定。" >&2
   exit 1
 fi
 
@@ -91,12 +97,21 @@ if [ -d "$DIR/backend/app" ]; then
   exit 1
 fi
 
+# 產出的 AGENTS.md 要講埠位登記在哪：有 proj 的登錄表就寫它（家目錄縮成 ~），沒有就指 .env。
+if [ -f "$REGISTRY" ]; then
+  case "$REGISTRY" in "$HOME"/*) REG_SHOWN="~${REGISTRY#"$HOME"}" ;; *) REG_SHOWN="$REGISTRY" ;; esac
+  REG_NOTE="埠位由 \`proj new\` 分配並登記在 \`${REG_SHOWN}\`"
+else
+  REG_NOTE="埠位寫在 \`.env\`（建專案時挑好的）"
+fi
+
 # 所有樣板都用 quoted heredoc 寫（裡面的 $ 原樣保留），再統一過這一道替換。
 subst() {
   sed -e "s|__NAME__|$NAME|g" \
       -e "s|__DB__|$DB|g" \
       -e "s|__WEB_PORT__|$WEB_PORT|g" \
-      -e "s|__API_PORT__|$API_PORT|g"
+      -e "s|__API_PORT__|$API_PORT|g" \
+      -e "s|__REG_NOTE__|$REG_NOTE|g"
 }
 
 say() { printf '  \033[32m✓\033[0m %s\n' "$1"; }
@@ -1063,7 +1078,7 @@ proj start __NAME__          # 或直接 ./run.sh
 | 後端 | http://localhost:__API_PORT__ |
 | 資料庫 | `__DB__`（本機 PostgreSQL） |
 
-埠位由 `proj new` 分配並登記在 `~/Projects/projctl/projects.json`，**不要自己改**。
+__REG_NOTE__，**不要自己改**。
 前端打的是相對路徑 `/api`，由 vite proxy 轉到後端。
 
 第一次跑之前要先建資料庫：
@@ -1094,7 +1109,7 @@ proj start __NAME__          # 或直接 ./run.sh
 | 前端 | http://localhost:__WEB_PORT__ |
 | 後端 | http://localhost:__API_PORT__ |
 
-埠位由 `proj new` 分配並登記在 `~/Projects/projctl/projects.json`，**不要自己改**。
+__REG_NOTE__，**不要自己改**。
 前端打的是相對路徑 `/api`，由 vite proxy 轉到後端。
 EOF
   fi
@@ -1426,7 +1441,7 @@ ALLOWED = _allow()
 #   `<span></span>`                  HTML
 #   `Docker.app/.../bin`             省略過的路徑
 #   `%USERPROFILE%\.agent-quota\…`   Windows 環境變數
-#   `bruuucechang/projctl`           GitHub repo 代稱
+#   `<owner>/projctl`                GitHub repo 代稱
 #   `backend/app/database.py:7`      file:line（要先剝掉 :7）
 #   `.env` / `backend/ledger.db`     gitignore 的執行期產物
 SKIP = re.compile(
@@ -1640,7 +1655,7 @@ cat <<EOF
   好了。
 
     cd $DIR
-    proj start $NAME
+    $(command -v proj >/dev/null 2>&1 && echo "proj start $NAME" || echo "./run.sh")
 
   前端 http://localhost:$WEB_PORT   後端 http://localhost:$API_PORT/health
 

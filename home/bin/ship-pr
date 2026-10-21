@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# ship-pr — ship 5b 的機械步驟一支做完（2026-10-21 W3）。審查與合併的判斷不在這裡，仍由 agent 逐條裁定。
+#
+#   ship-pr -F <訊息檔|-> [--body <內文檔>] [--base <目標>] <短名> <檔…>
+#       從 origin/<目標> 開 worktree＋分支 pr/<YYMMDD-HHMM>-<短名> → 把這些檔的改動搬過去 →
+#       commit（訊息從檔案）→ 共用 checkout 拿掉這些改動 → push 分支 → gh pr create → 印 PR 完整網址
+#   ship-pr --merge <PR 完整網址>
+#       移掉那個 PR 的 worktree → gh pr merge --squash --delete-branch → 確認 MERGED → 共用 checkout ff
+#
+# 手做時實際踩過的坑（每一條都是這支存在的理由）：
+#   · zsh 不拆字串，"$FILES" 被當成一個檔名；commit -m 被殼層展開吃字 → 檔案清單用 argv、訊息只吃檔案
+#   · gh pr create 不帶 --head，cwd 是共用 checkout 時拿錯分支 → 一律帶
+#   · code-review 給號碼被猜成別的 repo 的 PR → 最後印的是完整網址，照抄就對
+#   · worktree 有未追蹤檔時 remove 失敗、分支刪不掉 → --merge 先列出來再停
+#   · 搬改動前共用 checkout 就先動了，失敗時留下半套 → 共用 checkout 等 commit＋push 成功後才動，之前失敗全部收回
+#
+# 整個檔搬，不挑 hunk：檔裡混了別人的改動，先照 ship 第 2 節分開再跑這支。
+# 不做 animyria（有 pushq，推分支要 --no-verify、合併走 pushq enqueue）：origin 是 animyria 就直接擋。
+# 環境變數：SHIP_PR_WORKTREES＝worktree 放哪（預設 ~/.claude/worktrees）
+set -uo pipefail
+
+die(){ printf 'ship-pr: %s\n' "$1" >&2; exit "${2:-1}"; }
+say(){ printf '  %s\n' "$*"; }
+usage(){ sed -n '3,9p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+TOP=$(git rev-parse --show-toplevel 2>/dev/null) || die "這裡不是 git repo"
+TOP=$(cd "$TOP" && pwd -P)
+# 規則是請求、機制才是保證：animyria 走 lane＋pushq（推分支要 --no-verify），這支不適用就直接擋
+case "$(git -C "$TOP" remote get-url origin 2>/dev/null)" in *animyria*) die "animyria 不用 ship-pr：在 lane 裡開分支、pushq enqueue（ship 5b）" 2 ;; esac
+
+# 共用 checkout 追的分支；沒有 upstream 才問 GitHub 預設分支
+target_branch() {
+  local u
+  if u=$(git -C "$TOP" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null); then
+    case "$u" in origin/*) echo "${u#origin/}" ;; *) die "upstream 是 ${u}，不在 origin 上；用 --base 指定 origin 的哪個分支" 2 ;; esac
+  else
+    gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null
+  fi
+}
+
+# ── --merge ───────────────────────────────────────────────────────
+if [ "${1:-}" = "--merge" ]; then
+  URL=${2:-}
+  case "$URL" in https://*/pull/[0-9]*) ;; *) die "--merge 要給 PR 完整網址（只給號碼會猜錯 repo），收到：${URL:-空}" 2 ;; esac
+  REPO=$( cd "$TOP" && gh repo view --json url -q .url ) || die "gh repo view 失敗，判斷不出 origin 是哪個 repo"
+  case "$URL" in "$REPO"/pull/*) ;; *) die "這個 PR 不是 origin（${REPO}）的：$URL" 2 ;; esac
+  B=$(gh pr view "$URL" --json headRefName -q .headRefName) || die "gh pr view 失敗：$URL"
+  [ -n "$B" ] || die "讀不到 $URL 的分支名"
+  case "$B" in pr/*) ;; *) die "PR 分支 $B 不是 pr/ 開頭：ship-pr 只合自己開的分支，長期分支不碰" 2 ;; esac
+  # 找佔著這個分支的 worktree（共用 checkout 本身不算）
+  W=$(git -C "$TOP" worktree list --porcelain | awk -v b="refs/heads/$B" '
+        /^worktree /{w=substr($0,10)} $0=="branch " b{print w}')
+  [ "$W" = "$TOP" ] && W=
+  if [ -n "$W" ]; then
+    dirty=$(git -C "$W" status --porcelain --untracked-files=all)
+    [ -z "$dirty" ] || die "worktree $W 還有沒 commit 的東西，先處理（commit 進 PR 或刪掉）再合併：
+$dirty"
+  fi
+  # 本機分支要跟 origin 一樣：修了 commit 卻忘了推，合併的會是舊版、之後刪本機分支就把修正弄丟
+  git -C "$TOP" fetch -q origin "$B" || die "fetch origin $B 失敗"
+  LOCAL=$(git -C "$TOP" rev-parse -q --verify "refs/heads/$B" || true); REMOTE=$(git -C "$TOP" rev-parse "origin/$B")
+  [ -z "$LOCAL" ] || [ "$LOCAL" = "$REMOTE" ] || die "本機 $B 跟 origin 不一樣（有沒推的 commit？）：先 git -C ${W:-$TOP} push，審過再合併"
+  # 不帶 --delete-branch：gh 刪本機分支時 worktree 還佔著會失敗；遠端分支下面自己刪
+  ( cd "$TOP" && gh pr merge "$URL" --squash ) || say "gh pr merge 回非 0，看 PR 狀態再說"
+  st=$(gh pr view "$URL" --json state -q .state)
+  [ "$st" = MERGED ] || die "PR 狀態是 ${st:-讀不到}，沒合併（required checks 沒過就等它，不准 --admin）；worktree 還在，修的話在那裡改"
+  say "已合併：$URL"
+  # 合併確認之後才收：worktree、本機分支（剛剛確認過跟已合併的 origin 一樣，刪了不會丟東西）、遠端分支
+  if [ -n "$W" ]; then git -C "$TOP" worktree remove "$W" && say "移掉 worktree $W" || say "⚠ git worktree remove $W 失敗，手動收"; fi
+  [ -n "$LOCAL" ] && git -C "$TOP" branch -q -D "$B"
+  git -C "$TOP" push -q origin --delete "$B" 2>/dev/null || true   # repo 開了 delete_branch_on_merge 就已經沒了
+  git -C "$TOP" fetch -q origin || die "fetch 失敗，共用 checkout 沒同步"
+  if git -C "$TOP" merge -q --ff-only '@{u}' 2>/dev/null; then
+    say "共用 checkout 已同步到 $(git -C "$TOP" rev-parse --short HEAD)"
+  else
+    # 通常是別的 session 有沒推的 commit：不合併、不問，留給它們下次推的時候拉
+    say "已合併，這個 checkout 還沒同步（不能 fast-forward，多半是別的 session 有沒推的 commit）"
+  fi
+  exit 0
+fi
+
+# ── 開 PR ─────────────────────────────────────────────────────────
+MSG= BODY= BASE=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -F) [ $# -ge 2 ] || die "-F 後面要接值" 2; MSG=$2; shift 2 ;;
+    --body) [ $# -ge 2 ] || die "--body 後面要接值" 2; BODY=$2; shift 2 ;;
+    --base) [ $# -ge 2 ] || die "--base 後面要接值" 2; BASE=$2; shift 2 ;;
+    -h|--help) usage ;;
+    --) shift; break ;;
+    -*) die "不認得的選項：$1" 2 ;;
+    *) break ;;
+  esac
+done
+[ $# -ge 2 ] || usage
+NAME=$1; shift
+printf '%s' "$NAME" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$' || die "短名只能是小寫英數與 -：$NAME" 2
+[ -n "$MSG" ] || die "要給 -F <訊息檔>（或 -F - 從 stdin）；不收 -m，殼層展開會吃字" 2
+
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+if [ "$MSG" = - ]; then cat > "$TMP/msg"; else [ -f "$MSG" ] || die "訊息檔不存在：$MSG"; cp "$MSG" "$TMP/msg"; fi
+SUBJECT=$(grep -m1 -v '^[[:space:]]*$' "$TMP/msg")
+[ -n "$SUBJECT" ] || die "訊息檔是空的"
+if [ -n "$BODY" ]; then
+  [ -f "$BODY" ] || die "內文檔不存在：$BODY"; cp "$BODY" "$TMP/body"
+else
+  # 預設 PR 內文＝commit 訊息第一行以後的部分
+  awk 'f && (s || NF){s=1; print} !f && NF{f=1}' "$TMP/msg" > "$TMP/body"
+fi
+
+# 參數 → 相對 repo 根的路徑（相對 cwd、絕對路徑、經過 symlink 的路徑都可以）
+FILES=() TRACKED=() NEW=()
+for a in "$@"; do
+  [ -d "$a" ] && [ ! -L "$a" ] && die "給檔案不給目錄：$a" 2
+  # 所在目錄整個刪掉了（刪除也是改動）：照字面相對 cwd 正規化
+  if d=$(cd "$(dirname "$a")" 2>/dev/null && pwd -P); then p="$d/$(basename "$a")"
+  else p=$(python3 -c 'import os,sys; print(os.path.normpath(os.path.join(os.getcwd(), sys.argv[1])))' "$a"); fi
+  case "$p" in "$TOP"/*) rel=${p#"$TOP"/} ;; *) die "不在這個 repo 裡：${a}（repo 是 ${TOP}）" 2 ;; esac
+  dup=0; for x in ${FILES[@]+"${FILES[@]}"}; do [ "$x" = "$rel" ] && dup=1; done; [ "$dup" = 1 ] && continue
+  if git -C "$TOP" cat-file -e "HEAD:$rel" 2>/dev/null; then
+    git -C "$TOP" diff --quiet HEAD -- "$rel" && die "沒有改動：$rel" 2
+    TRACKED+=("$rel")
+  elif [ -e "$p" ] || [ -L "$p" ]; then
+    if git -C "$TOP" check-ignore -q --no-index -- "$rel"; then die "被 .gitignore 擋掉的檔：$rel" 2; fi
+    NEW+=("$rel")
+  else
+    die "不存在、HEAD 也沒有：$a" 2
+  fi
+  FILES+=("$rel")
+done
+
+[ -n "$BASE" ] || BASE=$(target_branch) || true
+[ -n "$BASE" ] || die "判斷不出目標分支，用 --base 指定" 2
+git -C "$TOP" fetch -q origin "$BASE" || die "git fetch origin $BASE 失敗"
+git -C "$TOP" rev-parse -q --verify "origin/$BASE^{commit}" >/dev/null || die "origin 上沒有 $BASE"
+
+B="pr/$(date +%y%m%d-%H%M)-$NAME"
+W="${SHIP_PR_WORKTREES:-$HOME/.claude/worktrees}/${B//\//-}"
+[ -e "$W" ] && die "worktree 位置已經有東西：$W"
+git -C "$TOP" show-ref -q --verify "refs/heads/$B" && die "分支已存在：$B"
+
+# 記下每個檔現在的內容，commit 後要確認沒人在中間又改過才從共用 checkout 拿掉
+# 一個檔一定只印一行（hash-object 失敗也要佔一行，不然後面的檔全部錯位）；symlink 記連結本身
+snap(){ if [ -L "$TOP/$1" ]; then printf 'link:%s\n' "$(readlink "$TOP/$1")"
+        elif [ -e "$TOP/$1" ]; then git -C "$TOP" hash-object --no-filters -- "$1" 2>/dev/null || echo unreadable
+        else echo gone; fi; }
+for f in "${FILES[@]}"; do snap "$f"; done > "$TMP/before"
+
+mkdir -p "$(dirname "$W")"
+git -C "$TOP" worktree add -q -b "$B" "$W" "origin/$BASE" || die "git worktree add 失敗"
+# 共用 checkout 還沒動過，到這裡為止任何失敗都整個收回
+abort(){ git -C "$TOP" worktree remove --force "$W" >/dev/null 2>&1; git -C "$TOP" branch -q -D "$B" >/dev/null 2>&1; die "$1（worktree 與分支已收回，共用 checkout 沒動）"; }
+
+if [ ${#TRACKED[@]} -gt 0 ]; then
+  # 相對 HEAD 的 diff（已暫存＋未暫存都算），套到 origin/<目標> 上；HEAD 跟 origin 對這些檔不一樣就會套不上
+  git -C "$TOP" diff --binary --no-ext-diff --no-color --src-prefix=a/ --dst-prefix=b/ HEAD -- "${TRACKED[@]}" > "$TMP/patch"
+  git -C "$W" apply --whitespace=nowarn "$TMP/patch" 2>"$TMP/err" \
+    || abort "改動套不上 origin/${BASE}（共用 checkout 跟 origin 對這些檔不一樣）：$(head -3 "$TMP/err")"
+fi
+for f in ${NEW[@]+"${NEW[@]}"}; do
+  { [ -e "$W/$f" ] || [ -L "$W/$f" ]; } && abort "origin/$BASE 已經有 ${f}（別人先加了同名檔）"
+  mkdir -p "$W/$(dirname "$f")" && cp -pP "$TOP/$f" "$W/$f" || abort "複製 $f 失敗"
+done
+git -C "$W" add -A -- "${FILES[@]}" || abort "git add 失敗"
+git -C "$W" diff --cached --quiet && abort "搬過去之後沒有差異（origin/$BASE 已經是這個內容）"
+git -C "$W" commit -q -F "$TMP/msg" || abort "commit 失敗（hook 擋下或作者身分沒設）"
+
+git -C "$W" push -q -u origin "HEAD:refs/heads/$B" 2>"$TMP/err" || abort "push 失敗：$(grep -v '^remote:' "$TMP/err" | head -3)"
+
+# ── commit、push 都成功，改動已經在 origin 的分支上：現在才從共用 checkout 拿掉 ──────────
+i=0; KEPT=()
+for f in "${FILES[@]}"; do
+  i=$((i+1)); was=$(sed -n "${i}p" "$TMP/before")
+  now=$(snap "$f")
+  if [ "$now" != "$was" ]; then KEPT+=("$f"); continue; fi
+  if git -C "$TOP" cat-file -e "HEAD:$f" 2>/dev/null; then
+    git -C "$TOP" restore --source=HEAD --staged --worktree -- "$f"
+  else
+    git -C "$TOP" rm -q --cached --ignore-unmatch -- "$f" >/dev/null
+    rm -f -- "$TOP/$f"
+    d=$(dirname "$f"); while [ "$d" != . ] && rmdir "$TOP/$d" 2>/dev/null; do d=$(dirname "$d"); done
+  fi
+done
+
+say "分支 ${B}（$(git -C "$W" rev-parse --short HEAD)）"
+say "worktree $W"
+say "作者 $(git -C "$W" log -1 --format='%an <%ae>')"
+for f in ${KEPT[@]+"${KEPT[@]}"}; do say "⚠ $f 在搬的途中又被改過，共用 checkout 裡沒拿掉——看一眼是不是別人的"; done
+
+command -v gh >/dev/null || die "沒有 gh，分支已推上去，手動開 PR：--base $BASE --head $B" 3
+URL=$( cd "$W" && gh pr create --base "$BASE" --head "$B" --title "$SUBJECT" --body-file "$TMP/body" ) \
+  || die "gh pr create 失敗；分支 $B 已推上去" 3
+URL=$(printf '%s\n' "$URL" | grep -Eo 'https://[^ ]+/pull/[0-9]+' | tail -1)
+[ -n "$URL" ] || die "gh pr create 沒印出 PR 網址" 3
+say "審查：code-review high $URL --comment"
+say "合併：$(cd "$(dirname "$0")" && pwd)/ship-pr --merge $URL"
+printf '%s\n' "$URL"

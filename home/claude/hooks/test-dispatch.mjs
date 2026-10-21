@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // dispatch.mjs 與各檢查的 run()／CLI 兩種跑法：node test-dispatch.mjs（全過離開碼 0）
 // 不寫任何真的 log／狀態：HOOK_NOLOG=1、HOME 指到暫存目錄（session-journal、context-tier 會寫 HOME 底下）。
+import './lib/test-config.mjs';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,12 +109,12 @@ const D = await import('./dispatch.mjs');
   execFileSync('git', ['init', '-q', R], { env: ENV });
   execFileSync('git', ['-C', R, 'config', 'user.email', 'someone@host.local'], { env: ENV });
   // 有 GitHub remote 才算真的 repo（暫存目錄裡沒有 remote 的會被 git-author-guard 當成測試用假 repo）
-  execFileSync('git', ['-C', R, 'remote', 'add', 'origin', 'https://github.com/bruuucechang/x.git'], { env: ENV });
+  execFileSync('git', ['-C', R, 'remote', 'add', 'origin', 'https://github.com/octocat/x.git'], { env: ENV });
   const f = sh('dispatch.mjs', ['PreToolUse'], { tool_name: 'Bash', cwd: T, tool_input: { command: `cd ${R} && ${GC} -F msg.txt` } });
   ok('假作者的 repo commit 被擋（cd 進去才查）', deny(f.json) && reason(f.json).includes('someone@host.local'), f.out.slice(0, 200));
   const f2 = sh('dispatch.mjs', ['PreToolUse'], { tool_name: 'Bash', cwd: R, tool_input: { command: `${GC} -F msg.txt` } });
   ok('沒有 cd 時看 hook 的 cwd', deny(f2.json));
-  execFileSync('git', ['-C', R, 'config', 'user.email', 'you@example.com'], { env: ENV });
+  execFileSync('git', ['-C', R, 'config', 'user.email', 'octo@example.com'], { env: ENV });
   const f3 = sh('dispatch.mjs', ['PreToolUse'], { tool_name: 'Bash', cwd: T, tool_input: { command: `cd ${R} && ${GC} -F msg.txt` } });
   ok('正確作者放行', f3.out === '');
 
@@ -147,7 +148,9 @@ const D = await import('./dispatch.mjs');
   const tr = join(T, 't.jsonl');
   const s = sh('ask-with-options.mjs', [], { session_id: 's', transcript_path: tr, last_assistant_message: '你想走哪一條？' });
   ok('ask-with-options 單獨跑會擋', s.json?.decision === 'block');
-  ok('blocks-current 單獨跑', sh('blocks-current.mjs', [], { source: 'startup', cwd: join(HERE, '..', '..', '..') }).json?.hookSpecificOutput?.additionalContext?.includes('區塊計畫'));
+  // 用這個 repo 自己的 blocks.md 當素材；公開版沒有那份就跳過
+  if (existsSync(join(HERE, '..', '..', '..', 'blocks.md')))
+    ok('blocks-current 單獨跑', sh('blocks-current.mjs', [], { source: 'startup', cwd: join(HERE, '..', '..', '..') }).json?.hookSpecificOutput?.additionalContext?.includes('區塊計畫'));
   {
     // 新塊寫在 docs/blocks.d/ 的碎片裡（animyria 2026-10-21）：blocks.md 全部打勾也不能報「全部完成」
     const R = join(T, 'frag-repo');
@@ -172,8 +175,8 @@ const D = await import('./dispatch.mjs');
   ok('壞輸入單獨跑 exit 0', sh('focus-guard.mjs', [], 'x').code === 0 && sh('ask-with-options.mjs', [], '').code === 0);
 }
 
-// ── account-check 的快取 ──
-{
+// ── account-check 的快取 ──（公開版拿掉了多帳號那支，沒有就跳過）
+if (existsSync(join(HERE, 'account-check.mjs'))) {
   process.env.ACCOUNT_CHECK_CACHE_DIR = T;   // 模組載入時就讀，要先設
   const A = await import('./account-check.mjs');
   const key = process.env.CLAUDE_CONFIG_DIR || join(process.env.HOME, '.claude');
