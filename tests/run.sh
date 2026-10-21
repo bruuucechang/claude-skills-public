@@ -292,5 +292,14 @@ else
   b "handoff-open 開場白有失敗" "$(printf '%s' "$out" | grep -A1 '✗' | head -6)"
 fi
 
+# ── rate-limit-switch：bruce 撞額度上限馬上換到 peter（2026-10-21 W5）─────────────────
+# 突變測過：不看 error、不記「這格換過」、不看換不換得了、反向也換、不看 peter 額度、不補 pane done，各自都會紅。
+printf '\n  rate-limit-switch\n\n'
+if out=$( node "$S/home/claude/hooks/test-rate-limit-switch.mjs" 2>&1 ); then
+  g "rate-limit-switch 案例表全對（$(printf '%s' "$out" | grep -oE '[0-9]+ 過' | tail -1)）"
+else
+  b "rate-limit-switch 案例表有錯" "$(printf '%s' "$out" | grep '✗' | head -5)"
+fi
+
 printf '\n  %s 過 · %s 失敗\n\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

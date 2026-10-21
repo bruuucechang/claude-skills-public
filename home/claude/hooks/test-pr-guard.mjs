@@ -108,6 +108,11 @@ for (const [cmd, label] of cases) { const w = repo('octocat'); commit(w, 'a.py')
   writeFileSync(join(w, 'a.py'), 'changed in merge\n'); sh(w, 'add', 'a.py'); sh(w, 'commit', '-q', '--amend', '--no-edit');
   if (!sh(w, 'log', '-1', '--format=%P').includes(' ')) throw new Error('測試前提壞了：HEAD 不是 merge commit');
   check(BLOCK, 'pre-push：merge commit 解衝突改的程式碼', push(w, 'git push origin master')); }
+// pr_guard_exempt 列的 repo（自動匯出的公開鏡像）可以直推；沒列的照擋
+{ const ex = join(mkdtempSync(join(tmpdir(), 'skills-config-')), 'config.json');
+  const w = repo('octocat'); commit(w, 'a.py');
+  writeFileSync(ex, JSON.stringify({ github_owner: 'octocat', pr_guard_exempt: [`OctoCat/${w.split('/').pop().replace(/-w$/, '')}`] }));
+  check(PASS, 'pre-push：pr_guard_exempt 列的 repo 直推放行（大小寫不分）', push(w, 'git push origin master', { ...AGENT, CLAUDE_SKILLS_CONFIG: ex })); }
 { const w = repo('octocat'); commit(w, 'a.py');
   sh(w, 'config', 'hook.pr-guard.command', ONELINER('/nonexistent/pr-prepush.mjs'));   // repo 設定蓋過全域的同名 hook
   check(PASS, 'pre-push：hook 檔不見了就放行（bootstrap 的寫法），不擋死整台', push(w, 'git push')); }

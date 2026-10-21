@@ -49,6 +49,8 @@ export const ROUTES = {
     ['account-check', 8000], 'session-title'],
   UserPromptSubmit: ['context-tier', 'account-drain', 'session-title'],
   Stop: ['ask-with-options', 'lang-guard', 'account-drain', 'session-journal'],
+  // 輸出被 Claude Code 忽略，只做副作用（撞額度上限換帳號，W5）。裡面是同步的 execFileSync，逾時靠它自己的 timeout（7＋3 秒）
+  StopFailure: [['rate-limit-switch', 11000]],
   PreToolUse: {
     Bash: ['git-author-guard', 'commit-message-guard', 'pushq-guard', 'pr-guard', 'focus-guard', 'kill-guard'],
     AskUserQuestion: ['ask-hides-prose'],

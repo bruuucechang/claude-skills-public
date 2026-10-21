@@ -28,6 +28,10 @@ export function commonDir(dir) {
 export const OWNER = String(config().github_owner || '').toLowerCase();
 export const ownerOf = (url) => (url || '').match(/[:/]([^/:]+)\/[^/]+?(?:\.git)?\/?$/)?.[1]?.toLowerCase() ?? null;
 export const isMine = (url) => !!OWNER && ownerOf(url) === OWNER;
+/** remote 網址 → "owner/name"（小寫、去 .git）。 */
+export const repoOf = (url) => (url || '').match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/)?.[1]?.toLowerCase() ?? null;
+/** config.json 的 pr_guard_exempt 列的 repo 可以直推（例：自動匯出的公開鏡像，內容不在那裡審，PR 只會經 GitHub 合併換掉 commit 身分）。 */
+export const isExempt = (url) => (config().pr_guard_exempt || []).map((r) => String(r).toLowerCase()).includes(repoOf(url));
 
 /** 照 `&&`／`||`／`;`／`|`／換行拆段。引號裡的分隔符號也會被拆——夠用，不是 shell 解析器。 */
 export const segments = (cmd) => cmd.split(/&&|\|\||[;|\n]/);

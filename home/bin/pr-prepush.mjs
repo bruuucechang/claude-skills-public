@@ -32,9 +32,9 @@ async function main() {
   const agent = (env.CLAUDECODE === "1" && env.CLAUDE_CODE_SESSION_ID) || env.CODEX_THREAD_ID;
   if (env.PUSHQ_PUSHER || !agent) return 0;
   // import 放在 try 裡面：lib 搬走或壞掉也只是放行，不能讓這台每一個 repo 都推不出去
-  const { git: g, isMine } = await import("../claude/hooks/lib/shell-git.mjs");
+  const { git: g, isMine, isExempt } = await import("../claude/hooks/lib/shell-git.mjs");
   const [remote, url] = process.argv.slice(2);
-  if (!isMine(url)) return 0;
+  if (!isMine(url) || isExempt(url)) return 0;
   const git = (args) => g(".", args, 60000);
 
   const top = git(["rev-parse", "--show-toplevel"]);

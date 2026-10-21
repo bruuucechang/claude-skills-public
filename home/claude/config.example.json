@@ -2,5 +2,6 @@
   "github_owner": "你的 GitHub 帳號（pr-guard、update-check 只管這個帳號的 repo；留空就不動作）",
   "git_name": "commit 用的名字",
   "git_emails": ["commit 用的 email；git-author-guard 只放行這些，空陣列就不檢查"],
-  "language": "zh-TW 會擋英文收尾的回報；null 就不檢查"
+  "language": "zh-TW 會擋英文收尾的回報；null 就不檢查",
+  "pr_guard_exempt": ["允許 agent 直推的 repo，格式 owner/name（例：自動匯出的鏡像）"]
 }

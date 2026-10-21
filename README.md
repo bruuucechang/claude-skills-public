@@ -37,6 +37,7 @@ bash ~/claude-skills/install.sh --owner <GitHub 帳號> --email <信箱>[,<信�
 |---|---|---|
 | `github_owner` | `pr-guard` 擋 agent 直推這個帳號 repo 的目標分支；`update-check` 只看這個帳號的 repo | 不擋、不查 |
 | `pr_guard` | install.sh 依 git 版本寫入；`false` 時 pr-guard 整支不動作 | 動作 |
+| `pr_guard_exempt` | 允許 agent 直推的 repo（`owner/name`），例如自動匯出的鏡像 | 沒有例外 |
 | `git_name` | 擋 commit 時提示的修正指令會用到 | — |
 | `git_emails` | `git-author-guard` 只放行這些信箱的 commit | 不檢查 |
 | `language` | `"zh-TW"`：回報以英文為主就要求用繁中重寫 | 不檢查 |

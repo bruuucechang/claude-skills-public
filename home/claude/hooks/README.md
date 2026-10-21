@@ -37,6 +37,7 @@ async 的回報（`pane-state`、session-remote 的 `report.mjs`、office 的 `s
 | `SessionStart` | 開場提醒（`session-start-context.txt`）、`session-restore`、`blocks-current`、`update-check`、`account-check`、`session-title` |
 | `UserPromptSubmit` | `context-tier`、`account-drain`、`session-title` |
 | `Stop` | `ask-with-options`、`lang-guard`、`account-drain`、`session-journal` |
+| `StopFailure`（matcher `rate_limit`） | `rate-limit-switch`（輸出被 Claude Code 忽略，只做副作用） |
 | `PreToolUse` Bash | `git-author-guard`、`commit-message-guard`、`pushq-guard`、`pr-guard`、`focus-guard`、`kill-guard` |
 | `PreToolUse` AskUserQuestion | `ask-hides-prose` |
 | `PreToolUse` browser_batch | `browser-batch-guard` |
@@ -174,6 +175,7 @@ cache_read 佔全部 token 的 98.5%
 |---|---|---|
 | `session-journal.mjs` | Stop | 每回合把「請求／做了什麼／新增了哪些 git 改動」追加到 `~/.claude/session-logs/<專案>/<session>.md` |
 | `account-drain.mjs` | UserPromptSubmit／Stop | 這格登的帳號週額度到門檻（bruce ≥ 90% → peter，判斷在 `tools/acct-drain.mjs`）就叫它寫交接單、`handoff-open` 換帳號；每個 session 提醒一次、擋一次 |
+| `rate-limit-switch.mjs` | StopFailure | bruce 撞到額度上限（`error: rate_limit`）就代寫交接單、直接 `handoff-open --to peter`，再補寫 pane done；peter 撞牆不反向、同一格 30 分鐘一次；換不成寫 gaveUp 標記給 handoff-watch 叫人 |
 | `context-tier.mjs` | UserPromptSubmit | 算出當下的 context **與這個 session 累積燒掉多少**，過門檻就說一聲 |
 | `session-restore.mjs` | SessionStart | `compact`/`resume` 注回 journal 尾段；`startup` 注回夠新的 `HANDOFF.md` 後歸檔；`clear` 只注 handoff-open 剛打的那次的換手開場白（標記 `clearing`＋同一個 claude，太長就只給檔名），使用者自己的 clear 什麼都不注 |
 
