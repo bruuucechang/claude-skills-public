@@ -1,0 +1,35 @@
+# 這個 repo 放兩種東西：skill 定義（*/SKILL.md），以及 home/ 底下那些原本
+# 散在家目錄、沒有版控的設定檔。**憑證、快取、本機執行期狀態都不該進來。**
+#
+# home/claude/memory/ 是刻意進版控的——那些是踩過才知道的事，換機器不帶走
+# 等於重踩一遍。它們會被自動修改，所以這個 repo 常常是 dirty 的，那是預期的。
+.DS_Store
+*.bak
+*.bak-*
+.env
+.env.*
+!.env.example
+
+# bootstrap.sh 取代既有檔案時留下的備份
+*.bak-[0-9]*
+
+# hook 的執行期記錄與逃生門開關（本機狀態，不是原始碼）
+home/claude/hooks/*.log
+home/claude/hooks/*.off
+home/claude/hooks/*.log.pruned
+home/claude/hooks/*.log.prune-lock
+
+# 外來的 skill——**程式碼不進這個 repo**，只有 install-external.sh 那份釘死
+# commit 的清單進。理由：archify 一個就 113 MB、sprite-gen 16 MB，全 commit
+# 進來會把 repo 撐爛，Windows 那邊還是 junction 接的，clone 一慢就拖累接機。
+# 要新增外來 skill 是改 install-external.sh，然後在這裡加一行。
+/sprite-gen/
+/agents-best-practices/
+/archify/
+/security-audit/
+# Agent-Reach 自己的安裝器寫進來的；只裝在 Air（2026-10-06 裁示），不進 install-external.sh
+/agent-reach/
+__pycache__/
+
+# tools/nofocus/build.sh 產的，換機器重建
+home/claude/tools/nofocus/nofocus.dylib

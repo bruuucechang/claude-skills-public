@@ -1,0 +1,1 @@
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "提醒（細節在 AGENTS.md）：要做／改／決定的事，開工前一次一題用 AskUserQuestion 問清楚並寫成規格確認；純提問、查詢、狀態直接回答。談定後做到完（含驗證收尾）、不中途停下問「要繼續嗎」；commit 就同一回合 push；自己 repo 的程式碼走 PR（/ship 5b），只改 .md 才直推。"}}

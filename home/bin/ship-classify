@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# ship-classify — 這次提交要直推還是走 PR（2026-10-20，規格 ~/.claude/skills/ship/pr-flow-spec.md）。
+#
+#   ship-classify <路徑…>     印 docs 或 code
+#   ship-classify --staged    看暫存區
+#
+# 全部落在文件類才是 docs（照舊直推）；任何一個檔不是就是 code（開 PR、審查、合併）。
+# 沒有任何檔 → exit 2，不准印 docs（沉默不等於成功）。
+#
+# **agent 的規則檔不算文件**：SKILL.md／AGENTS.md／CLAUDE.md 與 rules/、commands/、agents/ 底下的 .md
+# 改的是 agent 的行為，跟改程式一樣要審（PR #1 的審查實測：只改常設授權表原本會被直推）。
+set -euo pipefail
+
+# mac 的 /bin/bash 是 3.2，沒有 mapfile。quotepath=off＋-z：中文檔名不會變成帶引號的跳脫碼；
+# --no-renames：foo.sh 改名成 foo.md 要連舊路徑一起列出來，不然會被當成純文件
+files=()
+if [ "${1:-}" = "--staged" ]; then
+  # git 給的路徑相對 repo 根，往上找 SKILL.md 也要從根算（在子目錄跑會找錯地方）
+  cd "$(git rev-parse --show-toplevel)"
+  while IFS= read -r -d '' f; do files+=("$f"); done < <(git -c core.quotepath=off diff --cached --name-only --no-renames -z)
+else
+  files=("$@")
+fi
+[ "${#files[@]}" -gt 0 ] || { echo "ship-classify: 沒有任何檔可以分類" >&2; exit 2; }
+
+# 文件只認 .md（使用者裁示：交接單、blocks.md、記憶檔直推）。.txt 與 docs/ 底下的其他檔可能是
+# requirements.txt、docs/conf.py，一律算程式碼。
+is_doc() {
+  case "$1" in
+    SKILL.md|*/SKILL.md|AGENTS.md|*/AGENTS.md|CLAUDE.md|*/CLAUDE.md|CLAUDE.local.md|*/CLAUDE.local.md) return 1 ;;
+    rules/*|*/rules/*|commands/*|*/commands/*|agents/*|*/agents/*) return 1 ;;
+    *.md) ;;
+    *) return 1 ;;
+  esac
+  # skill 的子文件（env-doctor/windows.md 這類）是 SKILL.md 叫 agent 去讀的規則：往上找到 SKILL.md 就算程式碼
+  # 根目錄也要看（單一 skill 的 repo，SKILL.md 就在根）
+  # 不 fork dirname：pr-guard 有逾時，400 個檔逐層 fork 要 13 秒（PR #1 第四次審查實測）
+  local d="$1"
+  while :; do
+    case "$d" in */*) d="${d%/*}" ;; *) d="." ;; esac
+    [ -f "${d:-/}/SKILL.md" ] && return 1
+    { [ "$d" = "." ] || [ -z "$d" ]; } && break
+  done
+  return 0
+}
+
+for f in "${files[@]}"; do
+  is_doc "$f" || { echo code; exit 0; }
+done
+echo docs

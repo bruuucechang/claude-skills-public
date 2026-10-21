@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# bgopen <檔案或網址…> —— agent 要「打開給使用者看」時用這支，不要用 open。
+#
+# 規則（2026-10-11 使用者裁示）：工作中、連交付時都不准搶使用者的畫面，
+# 開在背景、回報裡說一聲就好。實測過的行為差異：
+#   - 圖片、PDF 等：`open -g` 就不搶焦點。
+#   - html／網址：`open -g` **照樣把 Chrome 正在看的分頁切走**（新分頁變成作用中）。
+#     所以改走 AppleScript：同網址的分頁原地 reload；沒有就在最前面視窗尾端加一個，
+#     立刻把作用中分頁切回原本那個（實測閃約 25ms）。全程不 activate Chrome。
+#   - 會自己 activate 的程式（Godot）：用同目錄的 bgrun，不是這支。
+set -euo pipefail
+[ "$#" -gt 0 ] || { echo "用法：bgopen <檔案或網址…>" >&2; exit 2; }
+
+chrome_bg() {  # $1 = 完整網址
+  osascript - "$1" <<'AS' >/dev/null
+on run argv
+  set u to item 1 of argv
+  tell application "Google Chrome"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if URL of t is u then
+          tell t to reload
+          return
+        end if
+      end repeat
+    end repeat
+    if (count of windows) is 0 then error "沒有 Chrome 視窗"
+    set w to window 1
+    set a to active tab index of w
+    make new tab at end of tabs of w with properties {URL:u}
+    set active tab index of w to a
+  end tell
+end run
+AS
+}
+
+for x in "$@"; do
+  case "$x" in
+    http://*|https://*|file://*) url="$x" ;;
+    *.html|*.htm|*.svg)
+      [ -e "$x" ] || { echo "找不到：$x" >&2; exit 1; }
+      url="file://$(cd "$(dirname "$x")" && pwd)/$(basename "$x")" ;;
+    *) open -g "$x"; continue ;;
+  esac
+  # Chrome 沒在跑就不要替他把 Chrome 叫起來搶畫面——退回系統預設的背景開啟。
+  if pgrep -xq "Google Chrome" && chrome_bg "$url" 2>/dev/null; then :; else open -g "$url"; fi
+done

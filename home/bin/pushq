@@ -1,0 +1,724 @@
+#!/usr/bin/env node
+// pushq — 推送佇列：一個 repo 的 master 只由一支背景程序依序推（2026-10-20）。
+//
+//   pushq enqueue [分支]          在 lane 裡跑：把分支（預設目前分支）丟進佇列，立刻返回
+//   pushq status [repo]           佇列、正在跑的那件、最近結果
+//   pushq log <id>                某一件的完整輸出
+//   pushq cancel <id> ／ retry <id>
+//   pushq register <名> <主 checkout 路徑> [--branch master] [--timeout 分鐘] [--fast-paths blocks.md --fast-check "…"]
+//   pushq register <名> <路徑> --via origin --machine <名>   別台機器（mani）：enqueue 改成推到 origin 的 pushq/<機器>/…
+//   pushq daemon [--once] [--no-dispatch]   背景程序本體（launchd 叫起；--once 處理一件就結束，給測試用）
+//   pushq install ／ uninstall    裝／拆 launchd（~/Library/LaunchAgents/com.pushq.runner.plist）
+//   pushq blank                   列出現在認得到的空白 session（除錯用）
+//
+// 規格（使用者逐題確認）：~/.claude/skills/handoff/push-queue-spec.md
+// 起因：animyria 同時 5 格各自重試推 master，pre-push 跑 10〜50 分鐘，跑完 master 已被別格推動，一直重來。
+//
+// - 一次只處理一件：跟最新的 origin/<branch> 合併 → 照常 git push（pre-push 照跑，PUSHQ_PUSHER=1 放行）。
+//   下一件的基準就是這次推上去的版本，所以不會撞車。
+// - 合併衝突或 pre-push 紅 → needs_fix，修理指示打進使用者預留的空白 session（還沒講過話、閒著的那格）；
+//   一格都沒有就推通知，之後每輪再找一次。佇列不自己開新 session（會撞到「確認」的限制）。
+// - 順序：後一件的 commit 若含著前一件（前一件還沒推上去），就等前一件。修好重丟的那件繼承原本的順位。
+// - 推成功就收 lane：只收已進 master、沒被別件用著、乾淨（只容許 Godot 的 *.import 沒追蹤檔）、沒有程序待在裡面的。
+// - 快速道（2026-10-20 追加）：跟 master 比只改 fast_paths（blocks.md 的佔位）的件，另一個 worktree 並行跑、
+//   只跑 fast_check（doc-audit）就推。一般件被拒、而 master 在驗證期間只多了 fast_paths 的改動 → 合併後只跑 fast_check 就推。
+// - 別台機器（2026-10-20 追加）：沒有 ssh 回來的路，用 origin 當管道。那台的 enqueue 推到 refs/heads/pushq/<機器>/<時間>/<分支>，
+//   這台每分鐘收一次，處理完（推上去／取消／被取代）就刪掉那個暫存分支。
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync, closeSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join, resolve } from "node:path";
+import * as IT from "../claude/tools/iterm.mjs";
+
+const HOME = homedir();
+const ROOT = process.env.PUSHQ_HOME || join(HOME, ".claude", "state", "pushq");
+const REPOS = join(ROOT, "repos.json");
+const SELF = resolve(process.argv[1]);
+const PLIST = join(HOME, "Library/LaunchAgents/com.pushq.runner.plist");
+const NOTIFY = process.env.PUSHQ_NOTIFY ?? "http://127.0.0.1:5391/notify";
+const SPEC = join(HOME, ".claude/skills/handoff/push-queue-spec.md");
+const IDLE_MS = 15_000;
+const LIVE = ["queued", "running", "needs_fix"];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const now = () => new Date().toISOString();
+const die = (m, code = 2) => { console.error("pushq: " + m); process.exit(code); };
+
+// ---------- 小工具 ----------
+function git(cwd, args, opts = {}) {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts }).trim();
+}
+function gitOk(cwd, args) {
+  try { git(cwd, args); return true; } catch { return false; }
+}
+const readJson = (f, d) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return d; } };
+function writeJson(f, v) {
+  const tmp = f + ".tmp" + process.pid;
+  writeFileSync(tmp, JSON.stringify(v, null, 2) + "\n");
+  renameSync(tmp, f);
+}
+const alive = (pid) => { if (!(pid > 0)) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
+const ps = (f, pid) => { try { return execFileSync("ps", ["-o", `${f}=`, "-p", String(pid)], { encoding: "utf8" }).trim(); } catch { return ""; } };
+
+const repos = () => readJson(REPOS, {});
+const qdir = (name) => join(ROOT, name);
+const itemsDir = (name) => join(qdir(name), "items");
+const logPath = (name, id) => join(qdir(name), "logs", id + ".log");
+const wtPath = (name) => join(qdir(name), "wt");
+
+function items(name) {
+  const d = itemsDir(name);
+  if (!existsSync(d)) return [];
+  return readdirSync(d).filter((f) => f.endsWith(".json"))
+    .map((f) => readJson(join(d, f), null)).filter(Boolean)
+    .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+}
+const saveItem = (name, it) => writeJson(join(itemsDir(name), it.id + ".json"), it);
+function findItem(id) {
+  for (const name of Object.keys(repos())) {
+    const it = items(name).find((x) => x.id === id);
+    if (it) return { name, it };
+  }
+  die(`找不到 ${id}`);
+}
+function logLine(name, id, msg) {
+  mkdirSync(join(qdir(name), "logs"), { recursive: true });
+  writeFileSync(logPath(name, id), `[${now()}] ${msg}\n`, { flag: "a" });
+}
+
+// cwd 屬於哪個登記過的 repo（用共用的 git 目錄比對，lane worktree 也認得）
+function repoOf(cwd) {
+  let common;
+  try { common = resolve(cwd, git(cwd, ["rev-parse", "--git-common-dir"])); } catch { die(`${cwd} 不是 git 工作目錄`); }
+  for (const [name, r] of Object.entries(repos())) {
+    if (resolve(r.path, ".git") === common) return name;
+  }
+  return null;
+}
+
+// 往上找跑著我們的那個 claude（Bash 工具 → shell → claude）
+function claudeAncestor() {
+  let pid = process.ppid;
+  for (let i = 0; i < 8 && pid > 1; i++) {
+    if (/(^|\/)claude$/.test(ps("comm", pid))) return pid;
+    pid = Number(ps("ppid", pid));
+  }
+  return null;
+}
+
+// ---------- enqueue ----------
+const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
+const slug = (x) => String(x).replace(/[^A-Za-z0-9_.-]+/g, "_");
+const PQREF = "refs/heads/pushq/";
+
+// 排一件進佇列（本機 lane 與別台經 origin 送來的共用）。同一條分支前面還沒處理的、等人修的 → 這一件取代它，
+// 並繼承它的順位（修好重丟不排到最後）。等人修的那件不管是哪台送來的都會被取代（修的人通常在這台）。
+function addItem(name, f) {
+  const r = repos()[name];
+  mkdirSync(itemsDir(name), { recursive: true });
+  const id = stamp() + "-" + (f.machine ? slug(f.machine) + "-" : "") + slug(f.branch || "detached");
+  let order = Date.now();
+  for (const old of items(name)) {
+    if (!f.branch || old.branch !== f.branch) continue;
+    const sameSrc = (old.machine || null) === (f.machine || null);
+    const replace = old.status === "needs_fix" ||
+      (sameSrc && old.status === "queued" && gitOk(r.path, ["merge-base", "--is-ancestor", old.sha, f.sha]));
+    if (!replace) continue;
+    order = Math.min(order, old.order);
+    old.status = "superseded"; old.superseded_by = id; old.finished = now();
+    saveItem(name, old);
+    logLine(name, old.id, `被 ${id} 取代`);
+    dropRemoteRef(name, old);
+  }
+  const it = {
+    id, repo: name, branch: f.branch || null, sha: f.sha, lane: f.lane || null, machine: f.machine || null,
+    remote_ref: f.remote_ref || null, order, status: "queued", attempts: 0, enqueued: now(), by: f.by || null,
+  };
+  saveItem(name, it);
+  logLine(name, id, `排進佇列：${it.branch || "(detached)"} @ ${it.sha.slice(0, 10)}，${it.machine ? `從 ${it.machine}（${it.remote_ref}）` : `lane ${it.lane}`}`);
+  return it;
+}
+
+// 別台送來的件處理完就刪掉 origin 上的暫存分支（--no-verify：刪分支不該跑 pre-push 的全套測試）
+function dropRemoteRef(name, it) {
+  if (!it.remote_ref) return;
+  const r = repos()[name];
+  try { git(r.path, ["push", "--no-verify", "-q", r.remote, "--delete", it.remote_ref]); } catch {}
+  try { git(r.path, ["update-ref", "-d", "refs/pushq/" + it.remote_ref.slice(PQREF.length)]); } catch {}
+}
+
+function enqueue(args) {
+  const cwd = process.cwd();
+  const name = repoOf(cwd);
+  if (!name) die(`這個 repo 沒登記進推送佇列（${REPOS}）。直接照原本的方式推。`);
+  const r = repos()[name];
+  const top = git(cwd, ["rev-parse", "--show-toplevel"]);
+  let branch = args[0] || null;
+  if (!branch) {
+    try { branch = git(cwd, ["symbolic-ref", "--short", "HEAD"]); } catch { branch = null; }
+  }
+  if (branch === r.branch) die(`不能把 ${r.branch} 本身丟進佇列——開一條分支（lane）把改動放上去再丟。`);
+  const sha = git(cwd, ["rev-parse", (branch || "HEAD") + "^{commit}"]);
+  const dirty = git(cwd, ["status", "--porcelain", "-z", "--untracked-files=no"]);
+  if (dirty && !args[0]) console.error("pushq：注意，工作目錄有沒 commit 的改動，它們不會被推（佇列只推 commit）。");
+
+  if (r.via === "origin") {
+    // 別台機器：推到 origin 的暫存分支，佇列主機每分鐘收一次。--no-verify：這不是推 master，不該在這裡跑全套測試
+    const ref = `${PQREF}${slug(r.machine)}/${stamp()}/${branch || "detached"}`;
+    git(cwd, ["push", "--no-verify", "-q", r.remote, `${sha}:${ref}`]);
+    console.log(`已送進 ${name} 的推送佇列（經 origin：${ref.slice("refs/heads/".length)}，${sha.slice(0, 10)}）。`);
+    console.log(`可以交接了。佇列主機一分鐘內會收進去，依序合併最新的 ${r.branch}、跑 pre-push、推上去；這條暫存分支消失＝處理完了。`);
+    console.log(`lane 佇列收不到，推上去之後自己收（git log ${r.remote}/${r.branch} 看得到 ${sha.slice(0, 10)} 就是推上去了）。`);
+    return;
+  }
+
+  const pid = claudeAncestor();
+  const sess = pid ? readJson(join(HOME, ".claude/sessions", pid + ".json"), {}) : {};
+  const it = addItem(name, { branch, sha, lane: top, by: { pid, session: sess.sessionId || null, name: sess.name || null } });
+  const ahead = items(name).filter((x) => LIVE.includes(x.status) && x.order < it.order).length;
+  console.log(`已排進 ${name} 的推送佇列：${it.id}（前面還有 ${ahead} 件）`);
+  console.log(`可以交接了。佇列會依序合併最新的 ${r.branch}、跑 pre-push、推上去；失敗會交給空白 session 修。`);
+  console.log(`查進度：pushq status ${name}　看輸出：pushq log ${it.id}`);
+  if (!alive(daemonPid())) console.error("pushq：⚠️ 背景程序沒在跑（pushq install 裝 launchd）。");
+}
+
+// ---------- status / log / cancel / retry ----------
+function daemonPid() { return Number(readJson(join(ROOT, "daemon.json"), {}).pid || 0); }
+
+function status(args) {
+  const names = args[0] ? [args[0]] : Object.keys(repos());
+  const d = readJson(join(ROOT, "daemon.json"), {});
+  const st = typeof d.state === "object" && d.state ? Object.entries(d.state).map(([k, v]) => `${k}：${v}`).join("　") : (d.state || "");
+  if (Object.values(repos()).some((r) => !r.via)) console.log(alive(Number(d.pid || 0)) ? `背景程序：pid ${d.pid}，${st}` : "背景程序：⚠️ 沒在跑");
+  for (const name of names) {
+    const r = repos()[name];
+    if (r?.via === "origin") {
+      console.log(`\n== ${name}（經 origin 送到佇列主機；這裡只看得到還沒處理完的）`);
+      let out = "";
+      try { out = git(r.path, ["ls-remote", r.remote, `${PQREF}${slug(r.machine)}/*`]); } catch (e) { out = ""; }
+      const lines = out.split("\n").filter(Boolean);
+      if (!lines.length) console.log("  （沒有待處理的）");
+      for (const l of lines) { const [sha, ref] = l.split("\t"); console.log(`  待處理  ${ref.slice("refs/heads/".length)}  ${sha.slice(0, 10)}`); }
+      continue;
+    }
+    const all = items(name);
+    console.log(`\n== ${name}`);
+    const live = all.filter((x) => LIVE.includes(x.status));
+    if (!live.length) console.log("  （佇列是空的）");
+    for (const x of live) {
+      const extra = x.status === "needs_fix" ? `  ${x.reason}${x.dispatched_to ? `（已交給 ${x.dispatched_to.name || x.dispatched_to.pid}）` : "（等空白 session）"}` : "";
+      console.log(`  ${x.status.padEnd(9)} ${x.id}  ${x.sha.slice(0, 10)}${x.fast ? "  （快速道）" : ""}${extra}`);
+    }
+    const done = all.filter((x) => !LIVE.includes(x.status)).sort((a, b) => (b.finished || "").localeCompare(a.finished || "")).slice(0, 8);
+    if (done.length) console.log("  最近：");
+    for (const x of done) console.log(`  ${x.status.padEnd(10)} ${x.id}  ${x.finished || ""}${x.pushed ? "  → " + x.pushed.slice(0, 10) : ""}${x.cleanup ? "  " + x.cleanup : ""}`);
+  }
+}
+
+function showLog(args) {
+  const { name, it } = findItem(args[0] || die("要給 id"));
+  console.log(JSON.stringify(it, null, 2));
+  const f = logPath(name, it.id);
+  if (existsSync(f)) process.stdout.write("\n" + readFileSync(f, "utf8"));
+}
+
+function setStatus(args, to) {
+  const { name, it } = findItem(args[0] || die("要給 id"));
+  if (to === "cancelled" && !LIVE.includes(it.status)) die(`${it.id} 已經是 ${it.status}`);
+  if (to === "queued" && it.status === "done") die(`${it.id} 已經推上去了`);
+  if (it.status === "running") die(`${it.id} 正在跑，等它跑完`);
+  it.status = to; it.attempts = 0; delete it.dispatched_to; delete it.notified;
+  if (to === "cancelled") it.finished = now();
+  saveItem(name, it);
+  if (to === "cancelled") dropRemoteRef(name, it);
+  logLine(name, it.id, `手動改成 ${to}`);
+  console.log(`${it.id} → ${to}`);
+}
+
+function register(args) {
+  const [name, path] = args;
+  if (!name || !path) die("用法：pushq register <名> <主 checkout 路徑> [--branch master] [--timeout 分鐘]");
+  const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
+  const all = repos();
+  all[name] = { path: resolve(path), remote: opt("--remote", "origin"), branch: opt("--branch", "master"), timeout_min: Number(opt("--timeout", 120)) };
+  const fp = opt("--fast-paths", null);
+  if (fp) { all[name].fast_paths = fp.split(",").map((s) => s.trim()).filter(Boolean); all[name].fast_check = opt("--fast-check", null) || die("--fast-paths 要配 --fast-check"); }
+  if (opt("--via", null)) { all[name].via = opt("--via"); all[name].machine = opt("--machine", null) || die("--via 要配 --machine"); }
+  mkdirSync(ROOT, { recursive: true });
+  writeJson(REPOS, all);
+  console.log(`登記好了：${name} → ${all[name].path}`);
+}
+
+// ---------- 空白 session ----------
+// 還沒講過話（紀錄檔不存在或沒有任何使用者輸入）、沒在工作、在 iTerm2 裡打得到字的 claude。
+// 各帳號的設定目錄（~/.claude、~/.claude-<帳號>）各有自己的 sessions／projects，都要掃。
+const configDirs = () => readdirSync(HOME).filter((d) => d === ".claude" || d.startsWith(".claude-"))
+  .map((d) => join(HOME, d)).filter((d) => existsSync(join(d, "sessions")));
+
+function transcriptHasPrompt(cfg, sid) {
+  const base = join(cfg, "projects");
+  let dirs = [];
+  try { dirs = readdirSync(base); } catch { return false; }
+  for (const d of dirs) {
+    const f = join(base, d, sid + ".jsonl");
+    if (!existsSync(f)) continue;
+    for (const line of readFileSync(f, "utf8").split("\n")) {
+      if (!line.includes('"type":"user"')) continue;
+      try {
+        const e = JSON.parse(line);
+        if (e.type !== "user" || e.isMeta) continue;
+        const c = e.message?.content;
+        if (typeof c === "string" && !c.startsWith("<local-command") && !c.startsWith("<command-name>")) return true;
+        if (Array.isArray(c) && c.some((p) => p.type === "text" && !String(p.text).startsWith("<"))) return true;
+      } catch { /* 寫到一半的行 */ }
+    }
+  }
+  return false;
+}
+
+function blankSessions(taken = new Set()) {
+  const files = [];
+  for (const cfg of configDirs()) {
+    try { for (const f of readdirSync(join(cfg, "sessions"))) if (/^\d+\.json$/.test(f)) files.push([cfg, join(cfg, "sessions", f)]); } catch {}
+  }
+  const out = [];
+  for (const [cfg, f] of files) {
+    const s = readJson(f, null);
+    if (!s || !alive(s.pid) || taken.has(s.pid)) continue;
+    if (!/(^|\/)claude$/.test(ps("comm", s.pid))) continue;
+    if (s.kind && s.kind !== "interactive") continue;
+    if (s.status === "busy") continue;
+    if (s.sessionId && transcriptHasPrompt(cfg, s.sessionId)) continue;
+    let env = "";
+    try { env = execFileSync("ps", ["eww", "-o", "command=", "-p", String(s.pid)], { encoding: "utf8" }); } catch { continue; }
+    const m = /ITERM_SESSION_ID=\S*:([0-9A-F-]{36})/.exec(env);
+    if (!m) continue;
+    if (IT.isProcessing(m[1]) === true) continue;
+    out.push({ pid: s.pid, uid: m[1], name: s.name || null, cwd: s.cwd, config: cfg, started: s.startedAt || 0 });
+  }
+  return out.sort((a, b) => a.started - b.started);
+}
+
+function notify(title, body) {
+  if (NOTIFY === "") return; // 測試用：PUSHQ_NOTIFY= 關掉通知
+  try {
+    execFileSync("curl", ["-s", "-m", "5", "-X", "POST", NOTIFY, "-H", "content-type: application/json",
+      "-d", JSON.stringify({ title, body, thread: "pushq" })], { stdio: "ignore" });
+  } catch { /* 通知服務沒開也不影響佇列 */ }
+  try {
+    execFileSync("osascript", ["-e", `display notification ${IT.as(body)} with title ${IT.as(title)}`], { stdio: "ignore", timeout: 5000 });
+  } catch { /* 同上 */ }
+}
+
+function fixPrompt(it, r) {
+  const where = it.machine
+    ? `這件是 ${it.machine} 經 origin 送來的（commit ${it.sha}，origin 上的 ${it.remote_ref.slice("refs/heads/".length)}）：在這台開一個 worktree 接手（git -C ${r.path} worktree add -b ${it.branch || "fix-" + it.sha.slice(0, 8)} <新 lane 路徑> ${it.sha}），`
+    : `lane 在 ${it.lane}（不在了就從分支 ${it.branch} 開一個 worktree），`;
+  return `推送佇列退回了 ${it.repo} 的 ${it.branch || it.sha.slice(0, 10)}（${it.reason}）。請你接手修好它：` +
+    where + `完整輸出在 ${logPath(it.repo, it.id)}。` +
+    `做法：在那條分支上合併最新的 origin/${r.branch}、解衝突或修到 ./run.sh check 與 ./run.sh test 都綠，commit。` +
+    `這條分支有開著的 PR（gh pr list --head <分支>）就先推回 PR 分支（--no-verify）、用 code-review 帶 PR 網址重審，過了才在 lane 裡跑 pushq enqueue；沒有 PR 就直接 enqueue。` +
+    `不要直接推 ${r.branch}（pre-push 會擋）。規格：${SPEC}。丟回佇列之後就收工，不用等它推完。`;
+}
+
+function dispatch(name, it, r, opts) {
+  if (it.dispatched_to) return;
+  const taken = new Set(items(name).filter((x) => x.status === "needs_fix" && x.dispatched_to).map((x) => x.dispatched_to.pid));
+  const cand = blankSessions(taken)[0];
+  if (cand && !opts.noDispatch) {
+    const ok = IT.typeInto(cand.uid, fixPrompt(it, r));
+    if (ok) {
+      it.dispatched_to = { pid: cand.pid, name: cand.name, at: now() };
+      saveItem(name, it);
+      logLine(name, it.id, `修理指示打進空白 session pid ${cand.pid}`);
+      notify(`推送佇列：${it.branch} 被退回`, `${it.reason}；已交給空白 session（pid ${cand.pid}）修。`);
+      return;
+    }
+  }
+  if (!it.notified) {
+    it.notified = now();
+    saveItem(name, it);
+    logLine(name, it.id, opts.noDispatch ? "（--no-dispatch）沒打進任何 session" : "找不到空白 session，推通知");
+    notify(`推送佇列：${it.branch} 被退回、沒人修`, `${it.reason}。開一個空白 session，佇列會自動把修理指示交給它。`);
+  }
+}
+
+// ---------- 收 lane ----------
+const procCwds = () => {
+  try {
+    return execFileSync("lsof", ["-d", "cwd", "-Fn"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+      .split("\n").filter((l) => l.startsWith("n")).map((l) => l.slice(1));
+  } catch { return []; }
+};
+
+function cleanupLane(name, it, r, wt) {
+  if (it.machine) { dropRemoteRef(name, it); return `${it.machine} 的 lane 由那台自己收；origin 上的暫存分支已刪`; }
+  if (!it.branch) return "沒分支，不收";
+  if (items(name).some((x) => x.id !== it.id && !x.machine && x.branch === it.branch && LIVE.includes(x.status))) return "同分支還有件在排，不收";
+  let tip;
+  const main = `${r.remote}/${r.branch}`;
+  try { tip = git(r.path, ["rev-parse", "refs/heads/" + it.branch]); } catch { return "分支已不在"; }
+  if (!gitOk(r.path, ["merge-base", "--is-ancestor", tip, main])) return "分支有新 commit，不收";
+  const notes = [];
+  const list = git(r.path, ["worktree", "list", "--porcelain"]).split("\n\n");
+  const cwds = procCwds();
+  let held = false;
+  for (const block of list) {
+    const path = /^worktree (.*)$/m.exec(block)?.[1];
+    const br = /^branch refs\/heads\/(.*)$/m.exec(block)?.[1];
+    if (!path || br !== it.branch) continue;
+    const st = execFileSync("git", ["status", "--porcelain", "-z"], { cwd: path, encoding: "utf8" }).split("\0").filter(Boolean);
+    const dirty = st.filter((e) => !(e.startsWith("?? ") && e.endsWith(".import")));
+    if (dirty.length) { notes.push(`${basename(path)} 有沒 commit 的改動，留著`); held = true; continue; }
+    if (cwds.some((c) => c === path || c.startsWith(path + "/"))) { notes.push(`${basename(path)} 有程序在用，留著`); held = true; continue; }
+    try {
+      git(r.path, ["worktree", "remove", "--force", path]);
+      notes.push(`收掉 ${path}`);
+    } catch (e) { notes.push(`收 ${basename(path)} 失敗：${String(e.stderr || e.message).trim().slice(0, 120)}`); held = true; }
+  }
+  if (!held) {
+    // 上面已確認分支整條都在 master 裡；主 checkout 的 HEAD 可能落後，所以不靠 -d 的「已合併進 HEAD」判斷
+    try { git(r.path, ["branch", "-D", it.branch]); notes.push(`刪分支 ${it.branch}`); }
+    catch (e) { notes.push(`分支沒刪：${String(e.stderr || e.message).trim().slice(0, 120)}`); }
+  }
+  return notes.join("；") || "沒有 lane 要收";
+}
+
+// ---------- 處理一件 ----------
+// 正在跑的子程序（各自一個程序群組）。背景程序被砍時要連它們一起砍，不然 git push 會在沒人看著的情況下推上去，
+// 跟重啟後處理的下一件撞在一起（2026-10-20 測試抓到）。快速道與一般件並行，所以可能同時有兩個。
+const children = new Set();
+const CHILD = () => join(ROOT, "child.json");
+const saveChildren = () => { try { writeJson(CHILD(), { pgids: [...children], since: now() }); } catch {} };
+function killGroup(pgid) {
+  if (!(pgid > 0)) return;
+  try { process.kill(-pgid, "SIGTERM"); } catch { return; }
+  try { execFileSync("sleep", ["3"]); process.kill(-pgid, "SIGKILL"); } catch {}
+}
+function run(cmd, args, { cwd, env, log, timeoutMs }) {
+  return new Promise((res) => {
+    const fd = openSync(log, "a");
+    const p = spawn(cmd, args, { cwd, env: { ...process.env, ...env }, stdio: ["ignore", fd, fd], detached: true });
+    children.add(p.pid); saveChildren();
+    let timedOut = false;
+    const t = setTimeout(() => { timedOut = true; try { process.kill(-p.pid, "SIGTERM"); } catch {} setTimeout(() => { try { process.kill(-p.pid, "SIGKILL"); } catch {} }, 10_000); }, timeoutMs);
+    p.on("exit", (code) => { clearTimeout(t); closeSync(fd); children.delete(p.pid); saveChildren(); res({ code, timedOut }); });
+  });
+}
+
+// 這一件跟 master 比是不是只改 fast_paths（佔位）
+function changedFiles(r, from, to) {
+  try { return git(r.path, ["diff", "--name-only", from, to]).split("\n").filter(Boolean); } catch { return null; }
+}
+// fast_paths 的項目以 `/` 結尾就是整個資料夾（animyria 的 `docs/blocks.d/`：新塊的佔位寫在碎片檔，2026-10-21）
+function fastPath(r, f) { return r.fast_paths.some((p) => (p.endsWith("/") ? f.startsWith(p) : f === p)); }
+function onlyFast(r, files) { return !!(r.fast_paths?.length && files && files.length && files.every((f) => fastPath(r, f))); }
+function isFast(r, it) {
+  if (!r.fast_paths?.length || it.slow_only) return false;
+  let base;
+  try { base = git(r.path, ["merge-base", `${r.remote}/${r.branch}`, it.sha]); } catch { return false; }
+  return onlyFast(r, changedFiles(r, base, it.sha));
+}
+
+function eligible(all, r, kind) {
+  const live = all.filter((x) => LIVE.includes(x.status));
+  for (const x of live) {
+    if (x.status !== "queued") continue;
+    if (kind && isFast(r, x) !== (kind === "fast")) continue;
+    // 前面還沒推上去的件，若被這一件包含著，就要等它
+    const blocker = live.find((y) => y !== x && y.order < x.order && y.sha !== x.sha && gitOk(r.path, ["merge-base", "--is-ancestor", y.sha, x.sha]));
+    if (!blocker) return x;
+  }
+  return null;
+}
+
+async function fastCheck(name, it, r, wt, log) {
+  logLine(name, it.id, `快速檢查：${r.fast_check}`);
+  const res = await run("bash", ["-c", r.fast_check], { cwd: wt, env: {}, log, timeoutMs: 10 * 60_000 });
+  return res.code === 0;
+}
+
+function ensureWt(name, r, wt) {
+  if (existsSync(join(wt, ".git"))) return;
+  mkdirSync(qdir(name), { recursive: true });
+  gitOk(r.path, ["worktree", "prune"]);
+  git(r.path, ["fetch", "-q", r.remote, r.branch]);
+  git(r.path, ["worktree", "add", "--detach", wt, `${r.remote}/${r.branch}`]);
+  seed(r, wt);
+}
+
+// 新 worktree 的生成物快取（Godot 的 .godot/）從主 checkout 複製一份（APFS clone，不佔空間）。
+// 不這樣做的話第一次匯入要從零開始：2026-10-20 負載 70〜80 時，2394 個資源 30 分鐘只匯入 764 個。
+// 快取只是起點，Godot 會照 .import 的 md5 重匯有變的檔，所以舊一點也沒關係。
+function seed(r, wt) {
+  for (const d of r.seed_dirs || []) {
+    const from = join(r.path, d), to = join(wt, d);
+    if (!existsSync(from) || existsSync(to)) continue;
+    try { execFileSync("cp", ["-Rc", from, to], { stdio: "ignore" }); }
+    catch { try { execFileSync("cp", ["-R", from, to], { stdio: "ignore" }); } catch {} }
+  }
+}
+
+async function processItem(name, it, r, kind = "slow") {
+  const fast = kind === "fast";
+  const wt = fast ? wtPath(name) + "-fast" : wtPath(name);
+  const log = logPath(name, it.id);
+  const fail = (reason) => {
+    it.status = "needs_fix"; it.reason = reason; it.failed = now();
+    saveItem(name, it); logLine(name, it.id, "退回：" + reason);
+  };
+  const finish = (pushed, note) => {
+    it.status = "done"; it.pushed = pushed; it.finished = now(); if (note) it.note = note;
+    it.cleanup = cleanupLane(name, it, r, wt);
+    saveItem(name, it); logLine(name, it.id, (note || `推上去了 ${pushed.slice(0, 10)}`) + "；" + it.cleanup);
+  };
+  const pushOut = async (verify) => {
+    const before = existsSync(log) ? readFileSync(log, "utf8").length : 0;
+    const res = await run("git", ["push", ...(verify ? [] : ["--no-verify"]), r.remote, `HEAD:refs/heads/${r.branch}`], {
+      cwd: wt, env: { PUSHQ_PUSHER: "1" }, log, timeoutMs: (verify ? r.timeout_min : 5) * 60_000,
+    });
+    return { ...res, out: readFileSync(log, "utf8").slice(before) };
+  };
+  // GitHub 回 "[rejected] (fetch first)"／non-fast-forward；本機 bare repo 同時更新時回 "cannot lock ref…incorrect old value"
+  const rejected = (out) => /\[rejected\]|\(fetch first\)|non-fast-forward|incorrect old value|cannot lock ref/.test(out);
+
+  it.status = "running"; it.started = now(); it.attempts = (it.attempts || 0) + 1; it.fast = fast;
+  saveItem(name, it);
+  logLine(name, it.id, `開始第 ${it.attempts} 次${fast ? "（快速道：只改 " + r.fast_paths.join("、") + "）" : ""}`);
+
+  if (!gitOk(r.path, ["cat-file", "-e", it.sha + "^{commit}"])) return fail("commit 不見了");
+  ensureWt(name, r, wt);
+  for (let race = 0; race < 6; race++) {
+    git(wt, ["fetch", "-q", r.remote, r.branch]);
+    if (gitOk(wt, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])) gitOk(wt, ["merge", "--abort"]);
+    git(wt, ["checkout", "-q", "-f", "--detach", `${r.remote}/${r.branch}`]);
+    git(wt, ["clean", "-fdq"]);
+    const base = git(wt, ["rev-parse", "HEAD"]);
+    if (gitOk(wt, ["merge-base", "--is-ancestor", it.sha, base])) return finish(base, `早就在 ${r.branch} 裡`);
+    if (gitOk(wt, ["merge-base", "--is-ancestor", base, it.sha])) {
+      git(wt, ["checkout", "-q", "--detach", it.sha]);
+      logLine(name, it.id, `快轉到 ${it.sha.slice(0, 10)}（基準 ${base.slice(0, 10)}）`);
+    } else {
+      try {
+        git(wt, ["merge", "--no-ff", "--no-edit", "-m", `Merge ${it.branch || it.sha.slice(0, 10)} into ${r.branch}（pushq）`, it.sha]);
+        logLine(name, it.id, `跟 ${base.slice(0, 10)} 合併成 ${git(wt, ["rev-parse", "HEAD"]).slice(0, 10)}`);
+      } catch {
+        const files = (() => { try { return git(wt, ["diff", "--name-only", "--diff-filter=U"]).split("\n").filter(Boolean); } catch { return []; } })();
+        // 專案自己的解法（只解生成檔，例如翻譯表、測試數那一行）；解得掉就 commit 繼續，解不掉照舊退回
+        let resolved = false;
+        if (r.resolve && files.length) {
+          try {
+            const o = execFileSync("bash", [r.resolve], { cwd: wt, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 5 * 60_000 });
+            if (!git(wt, ["diff", "--name-only", "--diff-filter=U"])) {
+              git(wt, ["commit", "--no-edit", "-q"]);
+              resolved = true;
+              logLine(name, it.id, `${o.trim()}（合併成 ${git(wt, ["rev-parse", "HEAD"]).slice(0, 10)}）`);
+            }
+          } catch (e) { logLine(name, it.id, `自動解衝突沒解掉：${String(e.stderr || e.message).trim().split("\n").pop()}`); }
+        }
+        if (!resolved) {
+          gitOk(wt, ["merge", "--abort"]);
+          return fail(`跟最新的 ${r.branch} 合併衝突：${files.slice(0, 6).join("、") || "（看輸出）"}${files.length > 6 ? ` 等 ${files.length} 個檔` : ""}`);
+        }
+      }
+      // 合併乾淨也可能讓生成的數字過期（兩邊各加測試、數字行只有一邊改），讓專案的解法重量一次（2026-10-21）
+      if (r.resolve && !fast) {
+        try {
+          const o = execFileSync("bash", [r.resolve, "--refresh"], { cwd: wt, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 5 * 60_000 });
+          if (!gitOk(wt, ["diff", "--cached", "--quiet"])) {
+            git(wt, ["commit", "-q", "-m", "合併後對齊生成的數字（pushq）"]);
+            logLine(name, it.id, `${o.trim()}（${git(wt, ["rev-parse", "HEAD"]).slice(0, 10)}）`);
+          }
+        } catch (e) { logLine(name, it.id, `合併後重量沒跑成：${String(e.stderr || e.message).trim().split("\n").pop()}`); }
+      }
+    }
+
+    if (fast) {
+      // 佔位：合併後跟 master 比還是只改 fast_paths 才走快速道（合併把別的東西帶進來就退回一般道）
+      if (!onlyFast(r, changedFiles(r, base, git(wt, ["rev-parse", "HEAD"])))) {
+        it.status = "queued"; it.fast = false; it.slow_only = true; saveItem(name, it); logLine(name, it.id, "合併後不只改佔位檔，改排一般道"); return;
+      }
+      if (!(await fastCheck(name, it, r, wt, log))) return fail(`快速檢查沒過：${r.fast_check}`);
+      logLine(name, it.id, `git push --no-verify ${r.remote} HEAD:${r.branch}（快速道）`);
+      const res = await pushOut(false);
+      if (res.code === 0) return finish(git(wt, ["rev-parse", "HEAD"]));
+      if (rejected(res.out)) { logLine(name, it.id, `${r.branch} 剛被推動，重新合併再推`); continue; }
+      return fail(`推不上去：${res.out.trim().split("\n").slice(-2).join(" / ").slice(0, 300)}`);
+    }
+
+    // 推之前用合併好的這棵樹重裝 hook：有 lane 還沒合併新版 master 時會照 smoke 的提示把舊 hook 裝回共用的 .git/hooks，
+    // smoke 就會判「裝的版本跟 tools/hooks/ 不一樣」把這件退回（2026-10-20 第一件就這樣被退）。
+    if (r.setup) {
+      try { execFileSync("bash", ["-c", r.setup], { cwd: wt, stdio: "ignore", timeout: 60_000 }); logLine(name, it.id, `重裝：${r.setup}`); }
+      catch { logLine(name, it.id, `⚠️ ${r.setup} 失敗`); }
+    }
+    logLine(name, it.id, `git push ${r.remote} HEAD:${r.branch}（pre-push 照跑）`);
+    const res = await pushOut(true);
+    if (res.code === 0) return finish(git(wt, ["rev-parse", "HEAD"]));
+    if (res.timedOut) {
+      if (it.attempts < 2) { it.status = "queued"; saveItem(name, it); logLine(name, it.id, `pre-push 超過 ${r.timeout_min} 分鐘，砍掉重排一次`); return; }
+      return fail(`pre-push 連兩次超過 ${r.timeout_min} 分鐘`);
+    }
+    if (!rejected(res.out)) {
+      const tail = res.out.trim().split("\n").filter((l) => l.trim()).slice(-3).join(" / ").slice(0, 300);
+      return fail(`pre-push 沒過：${tail || "看輸出"}`);
+    }
+    // 驗證期間 master 被推動了。如果多出來的只有佔位檔（快速道推的），驗過的樹只多了文件：合併後跑快速檢查就推，不重跑全套
+    for (let hop = 0; hop < 10; hop++) {
+      git(wt, ["fetch", "-q", r.remote, r.branch]);
+      const now_ = git(wt, ["rev-parse", `${r.remote}/${r.branch}`]);
+      if (!onlyFast(r, changedFiles(r, base, now_))) break;
+      try { git(wt, ["merge", "--no-edit", "-m", `Merge ${r.branch} 的佔位（pushq）`, now_]); }
+      catch { gitOk(wt, ["merge", "--abort"]); break; }
+      logLine(name, it.id, `${r.branch} 在驗證期間只多了 ${r.fast_paths.join("、")}，合併後只跑快速檢查`);
+      if (!(await fastCheck(name, it, r, wt, log))) return fail(`跟 ${r.branch} 的佔位合併後快速檢查沒過`);
+      const again = await pushOut(false);
+      if (again.code === 0) return finish(git(wt, ["rev-parse", "HEAD"]));
+      if (!rejected(again.out)) return fail(`推不上去：${again.out.trim().split("\n").slice(-2).join(" / ").slice(0, 300)}`);
+    }
+    logLine(name, it.id, `${r.branch} 在驗證期間被推動了（不只佔位），重新合併再跑全套`);
+  }
+  return fail(`${r.branch} 一直被別人推動，連 6 次沒推上去`);
+}
+
+// 已經在 master 裡的件（別處推上去了，或推完還沒記就重啟）直接標完成，不用排到一般道才發現
+function settleMerged(name, r) {
+  for (const it of items(name)) {
+    if (it.status !== "queued") continue;
+    if (!gitOk(r.path, ["merge-base", "--is-ancestor", it.sha, `${r.remote}/${r.branch}`])) continue;
+    it.status = "done"; it.pushed = git(r.path, ["rev-parse", `${r.remote}/${r.branch}`]); it.finished = now(); it.note = `早就在 ${r.branch} 裡`;
+    it.cleanup = cleanupLane(name, it, r, wtPath(name));
+    saveItem(name, it); logLine(name, it.id, it.note + "；" + it.cleanup);
+  }
+}
+
+// 別台經 origin 送來的件：refs/heads/pushq/<機器>/<時間>/<分支>
+function intake(name, r) {
+  let out;
+  try { out = git(r.path, ["ls-remote", r.remote, PQREF + "*"]); } catch { return; }
+  const known = new Set(items(name).map((x) => x.remote_ref).filter(Boolean));
+  for (const line of out.split("\n").filter(Boolean)) {
+    const [sha, ref] = line.split("\t");
+    if (known.has(ref)) continue;
+    const m = /^refs\/heads\/pushq\/([^/]+)\/([^/]+)\/(.+)$/.exec(ref);
+    if (!m) continue;
+    try { git(r.path, ["fetch", "-q", r.remote, `${ref}:refs/pushq/${ref.slice(PQREF.length)}`]); } catch { continue; }
+    addItem(name, { branch: m[3] === "detached" ? null : m[3], sha, machine: m[1], remote_ref: ref, by: { machine: m[1] } });
+  }
+}
+
+// ---------- daemon ----------
+async function daemon(args) {
+  const once = args.includes("--once");
+  const opts = { noDispatch: args.includes("--no-dispatch") };
+  mkdirSync(ROOT, { recursive: true });
+  const dfile = join(ROOT, "daemon.json");
+  const other = daemonPid();
+  if (other && other !== process.pid && alive(other) && /node/.test(ps("comm", other))) die(`已經有一支在跑（pid ${other}）`, 0);
+  const state = { 一般道: "啟動", 快速道: "啟動" };
+  const mark = (k, v) => { state[k] = v; writeJson(dfile, { pid: process.pid, since: now(), state }); };
+  mark("一般道", "啟動");
+  const left = readJson(CHILD(), null);
+  for (const g of left?.pgids || (left?.pgid ? [left.pgid] : [])) killGroup(g);
+  try { unlinkSync(CHILD()); } catch {}
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(sig, () => { for (const g of children) killGroup(g); process.exit(1); });
+  // 上次跑到一半就死掉的件：從頭重跑（不會推一半——推是最後一步）
+  for (const name of Object.keys(repos())) {
+    for (const it of items(name)) if (it.status === "running") { it.status = "queued"; it.attempts = Math.max(0, (it.attempts || 1) - 1); saveItem(name, it); logLine(name, it.id, "背景程序重啟，從頭重跑"); }
+  }
+  const hosted = () => Object.entries(repos()).filter(([, r]) => !r.via);
+  // 程式檔改過 → 等兩條道手上都沒有件時自己退出，launchd 用新版叫回來（改程式不打斷正在跑的件）
+  const mtime = () => { try { return statSync(realpathSync(SELF)).mtimeMs; } catch { return 0; } };
+  const born = mtime();
+  const busy = { slow: false, fast: false };
+  const maybeReload = () => {
+    if (once || busy.slow || busy.fast || mtime() === born) return;
+    logLine(hosted()[0]?.[0] || "_", "_daemon", "程式檔改過，換新版");
+    process.exit(0);
+  };
+  let lastIntake = 0;
+  const lastFetch = {};
+  const loop = async (kind) => {
+    const label = kind === "fast" ? "快速道" : "一般道";
+    for (;;) {
+      let worked = false;
+      maybeReload();
+      for (const [name, r] of hosted()) {
+        if (kind === "slow") {
+          if (Date.now() - lastIntake > 60_000) { lastIntake = Date.now(); intake(name, r); }
+          for (const it of items(name)) if (it.status === "needs_fix") dispatch(name, it, r, opts);
+        }
+        if (kind === "fast" && !r.fast_paths?.length) continue;
+        if (!items(name).some((x) => x.status === "queued")) continue;
+        // 判斷快速道要拿最新的 master 比，15 秒更新一次
+        if (Date.now() - (lastFetch[name] || 0) > 15_000) { lastFetch[name] = Date.now(); gitOk(r.path, ["fetch", "-q", r.remote, r.branch]); settleMerged(name, r); }
+        const it = eligible(items(name), r, r.fast_paths?.length ? kind : null);
+        if (!it) continue;
+        mark(label, `${name}：${it.id}`);
+        busy[kind] = true;
+        try { await processItem(name, it, r, kind); }
+        catch (e) {
+          it.status = "needs_fix"; it.reason = "佇列自己出錯：" + String(e.stderr || e.message).trim().slice(0, 200); it.failed = now();
+          saveItem(name, it); logLine(name, it.id, it.reason);
+        }
+        busy[kind] = false;
+        if (it.status === "needs_fix") dispatch(name, it, r, opts);
+        worked = true;
+        mark(label, "閒著");
+        if (once) return true;
+      }
+      if (once) return false;
+      if (!worked) await sleep(IDLE_MS);
+    }
+  };
+  if (once) { if (!(await loop("fast"))) await loop("slow"); return; }
+  await Promise.all([loop("slow"), loop("fast")]);
+}
+
+// ---------- launchd ----------
+function install() {
+  const path = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin", join(HOME, ".local/bin")].join(":");
+  mkdirSync(ROOT, { recursive: true });
+  writeFileSync(PLIST, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.pushq.runner</string>
+  <key>ProgramArguments</key><array><string>${existsSync("/opt/homebrew/bin/node") ? "/opt/homebrew/bin/node" : process.execPath}</string><string>${SELF}</string><string>daemon</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${path}</string><key>HOME</key><string>${HOME}</string><key>LANG</key><string>en_US.UTF-8</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>ProcessType</key><string>Standard</string>
+  <key>StandardOutPath</key><string>${join(ROOT, "daemon.log")}</string>
+  <key>StandardErrorPath</key><string>${join(ROOT, "daemon.log")}</string>
+</dict></plist>
+`);
+  // ProcessType 不能是 Background：macOS 會把它的 CPU 壓到幾乎沒有，Godot 第一次匯入跑了 35 分鐘只吃 0.7%（2026-10-20 實測）
+  const dom = `gui/${process.getuid()}`;
+  try { execFileSync("launchctl", ["bootout", `${dom}/com.pushq.runner`], { stdio: "ignore" }); } catch {}
+  // bootout 是非同步的：舊的還沒卸完就 bootstrap 會回「5: Input/output error」（2026-10-20 實測）
+  for (let i = 0; i < 40; i++) {
+    try { execFileSync("launchctl", ["print", `${dom}/com.pushq.runner`], { stdio: "ignore" }); } catch { break; }
+    execFileSync("sleep", ["0.5"]);
+  }
+  execFileSync("launchctl", ["bootstrap", dom, PLIST]);
+  console.log(`裝好了：${PLIST}（launchd 常駐，死掉 30 秒內叫回來）`);
+}
+function uninstall() {
+  try { execFileSync("launchctl", ["bootout", `gui/${process.getuid()}/com.pushq.runner`], { stdio: "ignore" }); } catch {}
+  try { unlinkSync(PLIST); } catch {}
+  console.log("拆掉了");
+}
+
+// ---------- main ----------
+const [cmd, ...rest] = process.argv.slice(2);
+const table = {
+  enqueue: () => enqueue(rest), status: () => status(rest), log: () => showLog(rest),
+  cancel: () => setStatus(rest, "cancelled"), retry: () => setStatus(rest, "queued"),
+  register: () => register(rest), daemon: () => daemon(rest), install, uninstall,
+  blank: () => console.log(JSON.stringify(blankSessions(), null, 2)),
+};
+if (!table[cmd]) {
+  console.log(readFileSync(SELF, "utf8").split("\n").slice(1, 12).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
+  process.exit(cmd ? 2 : 0);
+}
+await table[cmd]();

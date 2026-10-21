@@ -1,0 +1,14 @@
+{
+  "description": "Claude Code 的 hooks 裡能在 Codex 跑的那些，經分派器 dispatch.mjs <事件> codex（一個事件一個 node）。由 tools/codex-sync.sh 裝到 ~/.codex/hooks.json。各事件跑哪幾支看 dispatch.mjs 的 CODEX_ROUTES；哪些刻意沒搬、為什麼，見同目錄的 codex-hooks.md。",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "node \"$HOME/.claude/skills/home/claude/hooks/dispatch.mjs\" SessionStart codex" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node \"$HOME/.claude/skills/home/claude/hooks/dispatch.mjs\" PreToolUse codex" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "node \"$HOME/.claude/skills/home/claude/hooks/dispatch.mjs\" Stop codex" } ] }
+    ]
+  }
+}

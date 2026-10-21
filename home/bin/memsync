@@ -1,0 +1,135 @@
+#!/bin/bash
+# memsync — 記憶目錄自動 commit＋push（2026-10-21 使用者裁示；03-memory-rules.md §4-R1）。
+# launchd 每 15 分鐘跑一次（com.bruuucechang.memsync）。別台機器只靠 git 同步記憶，沒 commit 的記憶它們看不到。
+#
+#   memsync          只 add home/claude/memory/ → commit（路徑限定）→ push 到 feature/dataviz-tufte-skills
+#   memsync --dry    只印出會 commit 哪些檔
+#
+# 共用 checkout 有別的 session 的未 commit 改動，所以：
+# - 只 add 記憶目錄、`git commit -- home/claude/memory/` 限定路徑（別人暫存的東西留在暫存區，不會被帶進來）。
+# - 先 `merge --ff-only` 跟上 origin 再 commit：commit 後才 pull 的話只要 origin 有新 commit 就一定不能 ff。
+# - 不能 ff、HEAD 上有不是 memsync 的未推 commit、正在 merge／rebase、不在目標分支 → 停手、記 log、推通知。
+#   不合併、不 rebase、不 force（使用者裁示）。
+# - push 不經 PR：記憶 .md 是文件（ship-classify 判 docs）；launchd 不是 agent，全域 pre-push pr-guard 也不擋。
+# log：~/.claude/logs/memsync.log。測試：MEMSYNC_REPO、MEMSYNC_BRANCH、MEMSYNC_NOTIFY=（關掉 5391）、MEMSYNC_NO_OSA=1。
+set -u
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"   # launchd 的 PATH 只有 /usr/bin:/bin；git 要用 brew 的（≥ 2.55）
+REPO=${MEMSYNC_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}   # 這支所在的 clone（M5 Pro 的不在 ~/.claude/skills）
+BRANCH=${MEMSYNC_BRANCH:-feature/dataviz-tufte-skills}
+DIR=home/claude/memory
+LOG=$HOME/.claude/logs/memsync.log
+NOTIFY=${MEMSYNC_NOTIFY-http://127.0.0.1:5391/notify}
+TAG="記憶同步"
+DRY=0; [ "${1:-}" = "--dry" ] && DRY=1
+mkdir -p "$(dirname "$LOG")"
+LAST=$HOME/.claude/state/memsync.last   # 上次停手的原因：同一個原因只叫一次，不要每 15 分鐘叫一次
+log() { echo "$(date '+%F %T') $*" >> "$LOG"; echo "$*"; }
+STAGED=0
+stop() {
+  log "停手：$*"
+  [ "$STAGED" = 1 ] && git -C "$REPO" reset -q -- "$DIR" 2>/dev/null
+  [ $DRY = 1 ] && exit 1
+  if [ "$(cat "$LAST" 2>/dev/null)" = "$*" ]; then exit 1; fi
+  mkdir -p "$(dirname "$LAST")"; printf '%s' "$*" > "$LAST"
+  local body="$* （log：~/.claude/logs/memsync.log）"
+  if [ -n "$NOTIFY" ]; then
+    curl -s -m 5 -X POST "$NOTIFY" -H 'content-type: application/json' \
+      -d "$(python3 -c 'import json,sys; print(json.dumps({"title":"記憶同步停手","body":sys.argv[1],"thread":"memsync"}))' "$body")" >/dev/null 2>&1 || true
+  fi
+  if [ "${MEMSYNC_NO_OSA:-}" != 1 ]; then
+    osascript -e "display notification \"${body//\"/\\\"}\" with title \"記憶同步停手\"" >/dev/null 2>&1 || true
+  fi
+  exit 1
+}
+g() { git -C "$REPO" "$@"; }
+
+# 同時只跑一支（launchd 不會重疊，但手動跑可能撞上）
+LOCK="${TMPDIR:-/tmp}/memsync.$(id -u).lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  # 鎖超過 10 分鐘視為上一支死掉留下的
+  if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rmdir "$LOCK" 2>/dev/null; mkdir "$LOCK" 2>/dev/null || exit 0; else exit 0; fi
+fi
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
+[ -d "$REPO/$DIR" ] || stop "找不到 $REPO/$DIR"
+cur=$(g rev-parse --abbrev-ref HEAD 2>/dev/null) || stop "$REPO 不是 git repo"
+[ "$cur" = "$BRANCH" ] || stop "共用 checkout 在 ${cur}，不是 $BRANCH"
+GD=$(g rev-parse --absolute-git-dir)
+for f in MERGE_HEAD rebase-merge rebase-apply CHERRY_PICK_HEAD REVERT_HEAD; do
+  [ -e "$GD/$f" ] && stop "共用 checkout 正在 ${f}，不動它"
+done
+# 有沒有東西要 commit：tracked 的改動或 untracked 的新檔
+changes=$(g status --porcelain --untracked-files=all -- "$DIR")
+if [ -z "$changes" ] && [ -z "$(g log --oneline "origin/$BRANCH..HEAD" 2>/dev/null)" ]; then rm -f "$LAST"; exit 0; fi
+if [ $DRY = 1 ]; then echo "$changes"; exit 0; fi
+
+g fetch -q origin "$BRANCH" || stop "fetch 失敗"
+# HEAD 上沒推的 commit 只准是 memsync 自己的（上次推失敗留下的），別人的不替它推
+others=$(g log --format='%h %s' "origin/$BRANCH..HEAD" | grep -v " ${TAG}：" || true)
+[ -z "$others" ] && [ -n "$(g log --oneline "origin/$BRANCH..HEAD")" ] && {
+  bad=$(g diff --name-only "origin/$BRANCH...HEAD" | grep -v "^$DIR/" || true)
+  [ -n "$bad" ] && others="memsync 的 commit 裡有記憶目錄以外的檔：$bad"
+}
+[ -n "$others" ] && stop "HEAD 上有別人沒推的 commit，不替它推：$(echo "$others" | head -3 | tr '\n' ' ')"
+# 跟上 origin（只准 ff）。工作區有別人的改動也沒關係，除非 origin 改到同一個檔。
+# git 遇到「本機改過、origin 也改了」一律拒絕，連本機內容跟 origin 一模一樣也拒絕（2026-10-21 實測）——
+# 共用 checkout 常是這樣（別的 session 先套了 PR 的改動、PR 合併後還沒 pull）。所以 ff 失敗時再看一次：
+# 擋住的檔全都跟 origin 一模一樣、暫存區是空的 → 只移動 HEAD 與暫存區（reset 不帶 --hard，工作區不動），
+# 本機沒改過的檔從新的暫存區補回工作區。結果跟 ff 完全一樣；有任何一個檔內容不同就停手。
+ff() {
+  local out f bad="" clean=()
+  out=$(g merge --ff-only -q "origin/$BRANCH" 2>&1) && return 0
+  # 分岔（上次 push 被拒留下的 memsync commit＋origin 又前進）不走下面的退路：reset 會丟掉那個 commit（PR #10 審查）
+  g merge-base --is-ancestor HEAD "origin/$BRANCH" || stop "跟 origin/${BRANCH} 分岔了（上次推失敗的記憶 commit 還在本機），要人合：$(echo "$out" | head -1)"
+  g diff --cached --quiet || stop "不能 fast-forward（暫存區有別人的東西）：$(echo "$out" | head -2 | tr '\n' ' ')"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    # 本機不存在的檔不問 ls-files：origin 新增的目錄本機還沒有，git 會印「could not open directory」。
+    # 懸空的 symlink -e 是假的、但它是 untracked 的檔，要另外用 -L 認出來（PR #14 審查）
+    if g diff --quiet HEAD -- "$f" 2>/dev/null && { { [ ! -e "$REPO/$f" ] && [ ! -L "$REPO/$f" ]; } || [ -z "$(g ls-files --others -- "$f")" ]; }; then clean+=("$f"); continue; fi
+    # 本機改過：內容要跟 origin 一模一樣（origin 刪掉的檔，本機也要已經不在）
+    if g cat-file -e "origin/$BRANCH:$f" 2>/dev/null; then
+      [ -f "$REPO/$f" ] && [ "$(g hash-object -- "$f")" = "$(g rev-parse "origin/$BRANCH:$f")" ] || bad+="$f "
+    else
+      [ -e "$REPO/$f" ] && bad+="$f "
+    fi
+  done < <(g -c core.quotepath=off diff --no-renames --name-only HEAD "origin/$BRANCH")
+  [ -z "$bad" ] || stop "不能 fast-forward 到 origin/${BRANCH}，本機改過而且跟 origin 不同：$bad"
+  g reset -q "origin/$BRANCH" || stop "reset 到 origin/$BRANCH 失敗"
+  # 本機沒改過的檔逐一補成 origin 的內容；origin 刪掉的檔 reset 之後變成 untracked，照 ff 的結果刪掉。
+  # 逐一做：一次 checkout 一整批時只要有一個是刪掉的檔就整批中止（PR #10 審查）
+  for f in ${clean[@]+"${clean[@]}"}; do
+    if g cat-file -e "origin/$BRANCH:$f" 2>/dev/null; then
+      g checkout -q -- "$f" || stop "已經 reset 到 origin/${BRANCH}，但補不回 ${f}（工作區是舊內容，要人看）"
+    else
+      rm -f -- "$REPO/$f"
+    fi
+  done
+  log "ff（本機已有同樣內容的檔）到 $(g rev-parse --short HEAD)"
+}
+if [ -n "$(g log --oneline "HEAD..origin/$BRANCH")" ]; then
+  ff
+  log "跟上 origin：$(g rev-parse --short HEAD)"
+fi
+
+if [ -n "$(g status --porcelain --untracked-files=all -- "$DIR")" ]; then
+  # 停手時把自己 add 的記憶檔退出暫存區：留著的話別的 session 不帶路徑 commit 會把它們一起帶走（PR #10 審查）
+  STAGED=1
+  g add -A -- "$DIR" || stop "git add 失敗"
+  n=$(g diff --cached --name-only -- "$DIR" | wc -l | tr -d ' ')
+  host=$(scutil --get LocalHostName 2>/dev/null || hostname -s)
+  files=$(g diff --cached --name-only -- "$DIR" | sed "s#^$DIR/##" | head -20)
+  out=$(printf '%s：%s 個檔（%s）\n\nlaunchd 的 memsync 自動 commit，只含 %s/。\n\n%s\n' "$TAG" "$n" "$host" "$DIR" "$files" \
+        | g commit -q -F - -- "$DIR" 2>&1) || stop "commit 失敗：$(echo "$out" | head -2 | tr '\n' ' ')"
+  STAGED=0
+  log "commit $(g rev-parse --short HEAD)：$n 個檔"
+fi
+# 推的是記下的 sha，不是 HEAD；推之前再檢查一次 origin..sha 只有 memsync 自己、只動記憶目錄的 commit——
+# 檢查到 commit 之間別的 session 在共用 checkout commit 的話，它會夾在中間，不能替它推（PR #10 審查）
+SHA=$(g rev-parse HEAD)
+others=$(g log --format='%h %s' "origin/$BRANCH..$SHA" | grep -v " ${TAG}：" || true)
+bad=$(g diff --name-only "origin/$BRANCH...$SHA" | grep -v "^$DIR/" || true)
+[ -z "$others$bad" ] || stop "要推的範圍裡混進了別人的 commit 或記憶以外的檔，不推：$(echo "$others $bad" | head -3 | tr '\n' ' ')"
+out=$(g push -q origin "$SHA:refs/heads/$BRANCH" 2>&1) || stop "push 失敗（不重試、不合併）：$(echo "$out" | head -2 | tr '\n' ' ')"
+log "push $(git -C "$REPO" rev-parse --short "$SHA") → origin/$BRANCH"
+rm -f "$LAST"

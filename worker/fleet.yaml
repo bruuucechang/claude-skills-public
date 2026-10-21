@@ -1,0 +1,177 @@
+# 機隊清單（fleet）——四台機器的宣告式描述，fleet.py 讀這份。
+#
+# 形狀借自 openrig 的 RigSpec（github.com/mvschwarz/openrig 的 demo/rig.yaml）：
+# 一份 YAML 宣告「有哪些成員、各自什麼角色、在哪裡跑、能做什麼」，
+# 工具只讀它、不在程式裡寫死機器。沒有安裝 openrig，也不相容它的格式。
+#
+# 規則：
+#   - 只寫查得到的事實。查不到就留空並加「# 未確認」，不要猜。
+#   - 每個事實後面盡量附來源（記憶檔名或實測日期）。細節不抄過來，用記憶檔名指過去。
+#   - 機器的身分事實以記憶檔為準（m5pro-machine／windows-machine／desk-kr4toia）；
+#     兩邊不一致時先查記憶檔、實測，再回頭改這裡。
+#
+# 解析：fleet.py 有 PyYAML 就用，沒有就用內建的極簡解析器。
+# 所以這份**只能用**：區塊式 mapping／list、單行純量、'單引號'／"雙引號" 字串、
+# 整行或行尾 `  #` 註解。不要用 flow 寫法（{a: b}、[a, b]）、多行字串（| >）、錨點（& *）。
+# Windows 路徑一律用單引號包（反斜線在單引號裡不會被當跳脫）。
+
+version: '1'
+name: bruce-fleet
+
+members:
+  # ------------------------------------------------------------------ Air
+  - id: air
+    display_name: 'MacBook Air（這台）'
+    role: commander            # 指揮端：寫程式、grill、派工；不接工
+    platform: macos
+    ssh:
+      lan:                     # 本機，不需要 ssh
+      tailnet:                 # 本機，不需要 ssh
+    tailnet_ip: '100.x.x.x' # m5pro-machine 記憶檔（Pro → Air 的 air-bruce-ts）
+    cpu: 'Apple M4'            # 2026-10-06 sysctl 實測
+    cores: 10                  # 2026-10-06 sysctl 實測
+    memory_gb: 16              # 2026-10-06 sysctl 實測
+    os: 'macOS 26.5.2'         # 2026-10-06 sw_vers 實測
+    user: bruuucemac
+    project_roots:
+      - '/Users/bruuucemac/Projects'   # projects-moved 記憶檔
+    claude_path: '/Users/bruuucemac/.local/bin/claude'   # 2026-10-06 實測（symlink → versions/2.1.289）
+    claude_env:
+    good_for:
+      - 寫程式、grill、指揮與收尾
+      - 需要使用者登入狀態／瀏覽器／Artifact 的工作
+    cannot_or_pitfalls:
+      - 16 GB 建不出大圖（例：trip-atlas 日本 OTP 圖）→ 丟 pro
+      - '~/Documents 讀不到＝iCloud 不是 TCC（icloud-documents-eperm）'
+
+  # ------------------------------------------------------------------ M5 Pro
+  - id: pro
+    display_name: 'M5 Pro'
+    role: compute              # 算力主機
+    platform: macos
+    ssh:
+      lan: pro                 # Bonjour M5prodeMacBook-Pro.local
+      tailnet: pro-ts          # 100.x.x.x（Pro 上第二個 tailscaled，不是 manibari 那個 100.x.x.x）
+    cpu: 'Apple M5 Pro'        # ~/.ssh/config 註解
+    cores: 18                  # m5pro-machine 記憶檔
+    memory_gb: 48              # m5pro-machine 記憶檔
+    os: 'macOS 26.5.1'         # worker SKILL.md，2026-08-17 實測；之後可能已更新
+    user: m5pro
+    project_roots:
+      - '/Users/m5pro/Projects'   # agent-quota 在這（2026-10-06 ls 實測）
+      - '/Users/m5pro/Code'       # trip-atlas 在這（trip-atlas 記憶檔；2026-10-06 ls 實測），其餘多是 manibari 的專案
+    claude_path: '/Users/m5pro/bin/claude'   # 不是執行檔，是選身分的啟動腳本（m5pro-machine 記憶檔）
+    claude_env:
+      CLAUDE_USER: bruce       # 不帶的話，-p／無 TTY 會直接落到 manibari 的 ~/.claude（2026-10-06 讀腳本確認）
+    has_tmux: true             # /opt/homebrew/bin/tmux，2026-10-06 實測
+    good_for:
+      - 吃記憶體／吃 CPU 的批次（Air 的 16 GB 做不到的）
+      - 長跑服務（trip-atlas 的 OTP／Nominatim／圖磚）
+      - tmux 裡的長時間互動 claude
+    cannot_or_pitfalls:
+      - '有兩個 Claude 身分（manibari／bruce），設定要改兩份（m5pro-machine）'
+      - '它的 ~/.claude 是另一條血脈（tukey-dev-playbook），刻意不跟 claude-skills 合（m5pro-machine）'
+      - 'Pro → Air 要穿 SOCKS5 127.0.0.1:1055；tailscaled 第二實例只在登入後才起（m5pro-machine）'
+      - 'MagicDNS 解析不了，tailnet 一律用 100.x（m5pro-machine）'
+
+  # ------------------------------------------------------------------ BRUCEVICTUS
+  - id: victus
+    display_name: 'BRUCEVICTUS'
+    role: windows-worker
+    platform: windows
+    ssh:
+      lan: victus              # Bonjour brucevictus.local
+      tailnet: victus-ts        # 100.x.x.x
+    cpu: 'Intel i7-12700H'     # windows-machine 記憶檔
+    cores:                     # 未確認
+    memory_gb: 15.7            # windows-machine 記憶檔
+    os: 'Windows 11 家用版 25H2（build 26200）'   # windows-machine 記憶檔
+    user: user
+    project_roots:
+      - 'D:\Claude\Projects'   # windows-machine 記憶檔
+    claude_path: 'C:\Users\user\.local\bin\claude.exe'   # check-headless-work-before-reboot 記憶檔；2026-10-06 where 實測
+    claude_env:
+    job_dir: 'C:\Users\user\fleet-jobs'   # 派工暫存放 C 槽：D 槽 scp 慢到不能用（windows-machine）
+    good_for:
+      - 只能在 Windows 上做的事
+      - 平行跑 headless claude（palrogue 盡量用這台的 token：palrogue-use-victus-tokens）
+      - Docker 服務
+      - Palworld 解包資料（只在這台 D 槽）
+    cannot_or_pitfalls:
+      - '家用版沒有 RDP，只能 Chrome 遠端桌面，而且不傳 Shift（windows-machine）'
+      - 'ping 不回不代表死了，用 ssh／nc -z 22 判斷（windows-machine）'
+      - 'D 槽 scp 極慢；大檔區網會間歇卡死，沒有 rsync（windows-machine）'
+      - '每天 04:29 左右會被 Windows Update 自動重開（victus-auto-reboot-windows-update）'
+      - 'palrogue 自走排程 PalAuto／PalAutoGuard 在跑，不要誤砍（palrogue-autopilot-controls）'
+      - '開 Docker Desktop 會帶起 9 個容器（windows-machine）'
+
+  # ------------------------------------------------------------------ DESKTOP-KR4TOIA
+  - id: desk
+    display_name: 'DESKTOP-KR4TOIA'
+    role: windows-worker
+    platform: windows
+    ssh:
+      lan: desk                # Bonjour desktop-kr4toia.local
+      tailnet: desk-ts          # 100.x.x.x
+    cpu:                       # 未確認
+    cores: 12                  # desk-kr4toia 記憶檔
+    memory_gb: 32              # desk-kr4toia 記憶檔
+    os: 'Windows 10 Pro 22H2（build 19045）'   # desk-kr4toia 記憶檔
+    user: peter
+    project_roots:
+      - 'E:\Project'           # desk-kr4toia 記憶檔（沒有 s）
+    claude_path: 'C:\Users\peter\.local\bin\claude.exe'   # 記憶檔沒寫；2026-10-06 where 實測
+    claude_env:
+    job_dir: 'C:\Users\peter\fleet-jobs'
+    good_for:
+      - Windows 上吃資源的活優先丟這台（記憶體是 victus 的兩倍）
+      - 平行跑 headless claude
+      - agent-quota 自架伺服器（agent-quota-selfhosted）
+    cannot_or_pitfalls:
+      - 'PATH 上的 python 是 3.8 32 位元；建 venv 要指定 C:\Program Files\Anaconda3\python.exe（desk-kr4toia）'
+      - 'winget 從 SSH 會回報成功但沒真的裝（desk-kr4toia）'
+      - 'C 槽別放會長大的東西，Docker disk image 還沒搬到 D（desk-kr4toia）'
+      - 'agent-quota 的 node 伺服器在跑，重啟要照 PID 殺（agent-quota）'
+
+  # ------------------------------------------------------------------ mani
+  - id: mani
+    display_name: 'Manibaris MacBook Air'
+    role: compute              # GPU 給 animyria 產線（autoloop），CPU／記憶體給 animyria 寫程式的 tmux session
+    platform: macos
+    ssh:
+      lan: mani                # Bonjour Manibaris-MacBook-Air-1213.local（大檔走這條，mani-machine）
+      tailnet: mani-ts         # 100.x.x.x（userspace tailscaled，傳檔慢）
+    cpu: 'Apple M4'            # mani-machine 記憶檔
+    cores: 10                  # 2026-10-20 sysctl 實測
+    memory_gb: 32              # 2026-10-20 sysctl 實測
+    os: 'macOS 26.4.1'         # mani-machine 記憶檔
+    user: manibari
+    project_roots:
+      - '/Users/manibari/bruce-home/Projects'   # 使用者那套跑在假家目錄 ~/bruce-home（worker/mani-animyria-spec.md）
+    claude_path: '/Users/manibari/.local/bin/claude'
+    claude_env:
+      HOME: '/Users/manibari/bruce-home'        # 不帶就是 manibari 自己的 ~/.claude
+      NOQUAD: '1'
+    has_tmux: true             # tmux -L bruce，session anim；啟動腳本 ~/bruce-home/bin/anim
+    good_for:
+      - animyria 的 GPU 產線（出圖、LoRA 訓練）
+      - animyria 寫程式的互動 session（5 格，anim up 5）
+    cannot_or_pitfalls:
+      - '無風扇 Air，長時間滿載會降速'
+      - 'mac 的 Claude 登入存鑰匙圈，ssh＋假家目錄存不進去 → 用 setup-token 長期權杖（~/bruce-home/.claude-oauth-token）'
+      - '自己對外下載約 0.5 MB/s：大檔在 Air 下載再 rsync（mani-machine）；傳完比對 sha256（model-transfer-verify-sha）'
+      - '~/bruce-home/.claude/skills 要跟 Air 同一條分支（2026-10-20 是 feature/dataviz-tufte-skills，不是 master）；clone 到 master 會跑舊規則'
+      - '格子問問題時使用者看不到：要轉問，或叫他 ssh -t mani /Users/manibari/bruce-home/bin/anim attach'
+      - 'GitHub 金鑰是 manibari 帳號的；bruce-home 用兩把 deploy key（animyria、claude-skills）'
+
+# 誰可以派工給誰（openrig 的 edges 形狀）。目前只有 Air 往外派。
+edges:
+  - kind: dispatches_to
+    from: air
+    to: pro
+  - kind: dispatches_to
+    from: air
+    to: victus
+  - kind: dispatches_to
+    from: air
+    to: desk

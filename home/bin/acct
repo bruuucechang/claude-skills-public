@@ -1,0 +1,270 @@
+#!/usr/bin/env node
+// acct — 這台 Mac 上多個 Claude 帳號的一鍵啟動與健康檢查（2026-10-06）。
+//
+//   acct                     每個帳號一列：這台有沒有目錄登著它、開著幾個 session（--json 給 AgentQuota 面板）
+//   acct open <id> [1|4]     開一格（預設）或一組四宮格，開在現在登著那個帳號的設定目錄，帶它的標籤色
+//   acct open-mixed [左 右]  混合四格：一個 iTerm2 視窗 2×2，左兩格一個帳號、右兩格另一個（預設清單前兩個）
+//   acct add-window          開一個 iTerm2 視窗跑互動版的 acct add（AgentQuota 面板的「加帳號…」）
+//   acct pane <id|--dir 目錄> <cwd> [--prompt-file 檔]   印出一格要 eval 的指令（窗格與 handoff-open 用）
+//   acct login <id>          安全登入：只寫那個帳號自己的憑證，登入頁開在對應的 Chrome profile
+//   acct add <id> <email> [chrome_profile] [tier]
+//                            加新帳號：建設定目錄、接回共用設定、自動配色、寫進清單，接著走 acct login
+//   acct doctor              逐一核對（多問一次 claude auth status，比較慢）
+//
+// 帳號清單：~/.claude/skills/home/claude/accounts/<LocalHostName>.json
+//
+// 2026-10-16 起開出來的終端機一律是 iTerm2（使用者裁示）：開一格＝新視窗，
+// 四宮格＝一個視窗切 2×2 窗格（iTerm2 常規做法），做法在 ../claude/tools/iterm.mjs。
+// Terminal.app 版的 quad 與 .zshrc 掛勾留著沒刪，只是面板不再呼叫。
+//
+// 登入哪個帳號就算哪個帳號（2026-10-10 使用者裁示）：目錄屬於誰一律看實際登入，沒有「登錯」。
+// 清單上的 config_dir 只是那個帳號平常開在哪、安全登入寫到哪。
+// 提醒：/login 蓋掉的是「那個設定目錄」的憑證，同目錄其他開著的 session 下次續期也會變成新帳號。
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync, chmodSync } from "node:fs";
+import { join } from "node:path";
+import * as A from "../claude/tools/accounts.mjs";
+import * as IT from "../claude/tools/iterm.mjs";
+
+// 從 AgentQuota 面板（GUI app）呼叫時 PATH 只有系統目錄，quad 裡的 node、claude 會找不到
+process.env.PATH = ["/opt/homebrew/bin", join(A.HOME, ".local/bin"), process.env.PATH].join(":");
+
+const SKILLS = join(A.HOME, ".claude", "skills");
+// 新帳號的設定目錄要接回共用那份的東西（跟 ~/.claude-work 一樣的形狀）
+const SHARED_LINKS = {
+  "CLAUDE.md": join(SKILLS, "home/claude/CLAUDE.md"),
+  "AGENTS.md": join(SKILLS, "home/claude/AGENTS.md"),
+  "ARCHITECTURE.md": join(SKILLS, "home/claude/ARCHITECTURE.md"),
+  "settings.json": join(SKILLS, "home/claude/settings.json"),
+  commands: join(SKILLS, "home/claude/commands"),
+  memory: join(SKILLS, "home/claude/memory"),
+  rules: join(SKILLS, "home/claude/rules"),
+  skills: SKILLS,
+};
+
+const die = (msg, code = 2) => { console.error("acct: " + msg); process.exit(code); };
+const q = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
+
+function need(id) {
+  const { accounts } = A.load();
+  const a = A.find(accounts, id);
+  if (!a) die(`清單上沒有帳號「${id}」。現有：${accounts.map((x) => x.id).join("、")}`);
+  return a;
+}
+
+function fmtAge(d) {
+  if (!d) return "—";
+  const s = (Date.now() - d.getTime()) / 1000;
+  if (s < 3600) return `${Math.round(s / 60)} 分前`;
+  if (s < 86400) return `${Math.round(s / 3600)} 小時前`;
+  return `${Math.round(s / 86400)} 天前`;
+}
+
+// 每個設定目錄先看實際登誰，帳號那一列只是把登著它的目錄加起來（2026-10-10）。
+// problems 只有「目錄不能用」（沒登入、token 被清空），掛在平常用那個目錄的帳號上——按它的「安全登入」修。
+function judgeAll(accounts, opts) {
+  const states = A.configDirs(accounts).map(({ dir, config_dir }) => ({ ...A.dirState(dir, accounts, opts), config_dir }));
+  return accounts.map((a) => {
+    const mine = states.filter((st) => st.account?.id === a.id);
+    const home = states.find((st) => st.dir === a.dir);
+    const notes = [];
+    const extra = mine.filter((st) => st.dir !== a.dir).map((st) => st.config_dir);
+    if (extra.length) notes.push(`${extra.join("、")} 登的也是這個帳號`);
+    if (home && !home.problems.length && home.account?.id !== a.id) {
+      notes.push(`${a.config_dir} 現在登的是 ${home.account?.label || home.email || "清單外的帳號"}`);
+    }
+    return {
+      a, logged_in: mine.length > 0, problems: home?.problems || [], note: notes.join("；") || null,
+      sessions: mine.reduce((n, st) => n + st.sessions, 0), mdat: mine[0]?.cred.mdat || null,
+    };
+  });
+}
+
+// 給 AgentQuota 面板讀的（2026-10-06 合併進 AgentQuota 之後）
+function statusJson() {
+  const { accounts } = A.load();
+  console.log(JSON.stringify(judgeAll(accounts).map(({ a, problems, note, sessions, logged_in }) => (
+    { id: a.id, quota_id: a.quota_id || null, label: a.label || a.id, chrome_profile: a.chrome_profile || null,
+      family: a.colors?.family || null, ok: problems.length === 0, logged_in, problems, note, sessions }))));
+  return 0;
+}
+
+function status({ live = false } = {}) {
+  const { accounts, path } = A.load();
+  if (!accounts.length) die(`帳號清單是空的：${path}`);
+  let bad = 0;
+  for (const c of judgeAll(accounts, { live })) {
+    const a = c.a;
+    if (c.problems.length) bad++;
+    console.log(`${c.problems.length ? "✗" : c.logged_in ? "✓" : "–"} ${a.id.padEnd(8)} ${String(a.label || "").padEnd(20)} ${c.logged_in ? "這台登著" : "這台沒登"}  session ${c.sessions}  憑證更新 ${fmtAge(c.mdat)}`);
+    if (c.note) console.log(`    ↪ ${c.note}`);
+    for (const p of c.problems) console.log(`    ✗ ${a.config_dir}：${p}\n      → 修法：acct login ${a.id}`);
+  }
+  if (live) console.log(`\n清單：${path}`);
+  return bad ? 1 : 0;
+}
+
+// 窗格裡打的那一行用 PATH 上的 acct（~/.local/bin/acct 是 symlink），沒有才寫絕對路徑
+const ACCT = existsSync(join(A.HOME, ".local/bin/acct")) ? "acct" : join(SKILLS, "home/bin/acct");
+
+// 一格的指令：窗格裡只打一行 `eval "$(acct pane …)"`，真正的指令由下面的 pane() 印出來。
+// 開在現在登著這個帳號的目錄（2026-10-10）；這台沒有目錄登它就不開，免得開出來是別人。
+function paneFor(a, extra = []) {
+  if (!A.dirFor(A.load().accounts, a)) die(`這台沒有任何設定目錄登 ${a.id}，先 acct login ${a.id}`);
+  const run = process.env.ACCT_RUN ? ["--run", process.env.ACCT_RUN] : [];   // ACCT_RUN：驗收時換掉 claude
+  return IT.launchLine(ACCT, [a.id, process.env.ACCT_CWD || A.HOME, ...run, ...extra]);
+}
+
+// acct pane <id|--dir 目錄> <cwd> [--prompt-file 檔] [--run 指令]
+// 印出一格要 eval 的 shell 指令（上色、badge、cd、設定目錄、跑 claude）。handoff-open 也用這個。
+function pane(argv) {
+  const opt = { run: "claude" };
+  const pos = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--dir") opt.dir = A.expand(argv[++i]);
+    else if (argv[i] === "--prompt-file") opt.promptFile = argv[++i];
+    else if (argv[i] === "--run") opt.run = argv[++i];
+    else pos.push(argv[i]);
+  }
+  const { accounts } = A.load();
+  let a, dir;
+  if (opt.dir) { dir = opt.dir; a = A.actual(accounts, dir); }
+  else { a = need(pos.shift()); dir = A.dirFor(accounts, a); }
+  if (!dir) die(`這台沒有任何設定目錄登 ${a.id}`);
+  const cwd = pos[0] || A.HOME;
+  const args = opt.promptFile ? `"$(cat ${q(opt.promptFile)})"` : "";
+  console.log(IT.paneCmd({
+    cwd, configDir: dir, defaultDir: A.DEFAULT_DIR, tab: IT.tabColor(a), bg: IT.bgColor(a),
+    badge: a?.id || "", args, run: opt.run,
+  }));
+}
+
+function openOne(a) {
+  IT.openWindow([paneFor(a)]);
+  console.log(`已開一格 ${a.id}（${a.label}）`);
+}
+
+function openQuad(a) {
+  const c = paneFor(a);
+  IT.openWindow([c, c, c, c]);
+  console.log(`已開四宮格 ${a.id}（${a.label}）`);
+}
+
+// 混合四格（2026-10-16 裁示）：左兩格 left、右兩格 right，各帶自己的設定目錄與標籤色
+function openMixed(leftId, rightId) {
+  const { accounts } = A.load();
+  const usable = accounts.filter((x) => A.dirFor(accounts, x));
+  const left = leftId ? need(leftId) : usable[0];
+  const right = rightId ? need(rightId) : usable.find((x) => x.id !== left?.id);
+  if (!left || !right) die("混合四格要兩個這台登著的帳號");
+  const l = paneFor(left), r = paneFor(right);
+  IT.openWindow([l, r, l, r]);   // 順序：左上、右上、左下、右下
+  console.log(`已開混合四格：左 ${left.id}、右 ${right.id}`);
+}
+
+// 安全登入：開一個 iTerm2 視窗跑 `claude auth login`，
+// 設定目錄指定成這個帳號的，BROWSER 指到 acct-browser（把登入頁開在指定的 Chrome profile）。
+// claude 會尊重 BROWSER（2026-10-06 實測：用假的 BROWSER 接到了 OAuth 網址）。
+function login(a) {
+  const env = [
+    `CLAUDE_CONFIG_DIR=${q(a.dir)}`,
+    `ACCT_CHROME_PROFILE=${q(a.chrome_profile || "Default")}`,
+    `BROWSER=${q(join(SKILLS, "home/bin/acct-browser"))}`,
+  ].join(" ");
+  const cmd = `${IT.printfOf(IT.seqTab(IT.tabColor(a)))}; echo ${q(`登入 ${a.id}（${a.email}）——登入頁會開在 Chrome「${a.chrome_profile}」`)}; ` +
+    `${env} claude auth login --email ${q(a.email)} && ${q(join(SKILLS, "home/bin/acct"))} doctor`;
+  IT.openWindow([cmd]);
+  console.log(`已開登入視窗：${a.id} → Chrome profile「${a.chrome_profile}」`);
+}
+
+// 「加帳號…」要一題一題問，所以開一個視窗跑互動版
+function addWindow() {
+  IT.openWindow([`${q(process.execPath)} ${q(join(SKILLS, "home/bin/acct"))} add`]);
+}
+
+async function ask(question, fallback = "") {
+  const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
+  const ans = (await rl.question(question + (fallback ? `（Enter＝${fallback}）` : "") + "：")).trim();
+  rl.close();
+  return ans || fallback;
+}
+
+// 沒給參數就一題一題問（選單列的「加帳號…」走這條）
+async function addInteractive() {
+  console.log("加一個新的 Claude 帳號到這台 Mac。\n");
+  const id = await ask("別名（小寫英數，例如 alice）");
+  const email = await ask("這個帳號的 email");
+  console.log("\n這台的 Chrome profile：");
+  try {
+    const ls = JSON.parse(execFileSync("cat", [join(A.HOME, "Library/Application Support/Google/Chrome/Local State")], { encoding: "utf8" }));
+    for (const [k, v] of Object.entries(ls.profile.info_cache)) console.log(`  ${k.padEnd(10)} ${v.name}（${v.user_name || "未登入 Google"}）`);
+  } catch {}
+  console.log("（新帳號最好有自己的 Chrome profile，而且那個 profile 的 claude.ai 登的就是這個帳號）");
+  const prof = await ask("登入時用哪個 Chrome profile", "Default");
+  add(id, email, prof);
+  if ((await ask("現在就登入嗎？y/n", "y")).toLowerCase().startsWith("y")) login(need(id));
+}
+
+function add(id, email, chromeProfile = "Default", tier = null) {
+  if (!id || !email) die("用法：acct add <id> <email> [chrome_profile] [tier]");
+  if (!/^[a-z][a-z0-9-]*$/.test(id)) die("id 只能用小寫英數與 -，而且要英文字母開頭");
+  const { data, accounts } = A.load();
+  if (A.find(accounts, id)) die(`清單上已經有 ${id}`);
+  const dirRel = `~/.claude-${id}`;
+  const dir = A.expand(dirRel);
+  mkdirSync(dir, { recursive: true });
+  for (const [name, target] of Object.entries(SHARED_LINKS)) {
+    const p = join(dir, name);
+    if (!existsSync(p)) symlinkSync(target, p);
+  }
+  const colors = A.nextColors(accounts);
+  data.accounts.push({
+    id,
+    label: email.split("@")[0],
+    quota_id: `claude-${id}`,   // agent-quota 伺服器上的帳號 id；那邊要宣告同一個 id 才會接得起來
+    config_dir: dirRel,
+    email,
+    tier,                 // null＝還不知道；第一次登入後 acct doctor 會提示要填哪個值
+    chrome_profile: chromeProfile,
+    colors: { ...colors },
+  });
+  A.save(data);
+  console.log(`已加入 ${id}：${dirRel}，配色「${colors.family}」系，Chrome profile「${chromeProfile}」`);
+  console.log(`下一步：acct login ${id}`);
+}
+
+function doctor() {
+  const rc = status({ live: true });
+  const { accounts } = A.load();
+  for (const a of accounts) {
+    const d = a.tier ? null : A.dirFor(accounts, a);   // 沒 tier 的帳號靠 email 認得出來時，順便報實際 tier
+    const c = d ? A.credential(d) : {};
+    if (!a.tier && c.tier) console.log(`    提示：${a.id} 在清單上沒有 tier，實際是 ${c.tier}，可以寫進清單`);
+  }
+  console.log("\nChrome profile 對照（Local State）：");
+  try {
+    const ls = JSON.parse(execFileSync("cat", [join(A.HOME, "Library/Application Support/Google/Chrome/Local State")], { encoding: "utf8" }));
+    for (const [k, v] of Object.entries(ls.profile.info_cache)) console.log(`    ${k.padEnd(10)} ${v.name}（${v.user_name || "未登入 Google"}）`);
+  } catch { console.log("    讀不到"); }
+  return rc;
+}
+
+const [cmd, ...rest] = process.argv.slice(2);
+switch (cmd) {
+  case undefined: case "status": process.exit(rest.includes("--json") ? statusJson() : status());
+  case "doctor": process.exit(doctor());
+  case "open": {
+    const a = need(rest[0]);
+    (rest[1] === "4" ? openQuad : openOne)(a);
+    break;
+  }
+  case "open-mixed": openMixed(rest[0], rest[1]); break;
+  case "pane": pane(rest); break;
+  case "add-window": addWindow(); break;
+  case "login": login(need(rest[0])); break;
+  case "add": rest.length ? add(...rest) : await addInteractive(); break;
+  case "-h": case "--help": case "help":
+    console.log(execFileSync("sed", ["-n", "2,14p", process.argv[1]], { encoding: "utf8" }).replace(/^\/\/ ?/gm, ""));
+    break;
+  default: die(`不認得的子指令：${cmd}（acct help）`);
+}

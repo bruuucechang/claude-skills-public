@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+// handoff-watch — 換手失敗要會叫（2026-10-21，05-multimachine.md R2）。launchd 每分鐘跑一次（com.bruuucechang.handoff-watch）。
+//
+//   handoff-watch            掃 ~/.claude/state/handoff/ 的標記，失敗的推通知（每個標記只叫一次）
+//   handoff-watch --dry      只印出會叫哪些，不推、不記
+//
+// 判準（handoff-open 寫的標記檔）：
+// - 有 gaveUp 或 unconfirmed → 叫。
+// - 還沒有任何結果（started／gaveUp／unconfirmed）、背景程序（同名 .pid）已經不在了 → 叫（被例外打死，10-16〜10-20 有兩次）。
+// - 不管有沒有 .pid：建立超過 15 分鐘還沒結果就算（--inject 最多等 10 分鐘＋打字；pid 可能被重用）。
+// - 只看 2 小時內建立的標記，裝上去的第一次不會把歷史舊帳全叫一遍。split 模式由新格收，不看。
+// 通知：127.0.0.1:5391/notify（跟 pushq 同一支）＋ osascript display notification。兩個都不 activate、不搶焦點。
+// 叫過的記在同名 .notified（不寫回標記：--inject 可能還拿著舊的那份在寫）。
+// 測試：HANDOFF_STATE=<目錄> 換掉標記目錄；HANDOFF_NOTIFY= 關掉 5391；HANDOFF_NO_OSA=1 關掉系統通知。
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+const STATE = process.env.HANDOFF_STATE || join(homedir(), ".claude", "state", "handoff");
+const NOTIFY = process.env.HANDOFF_NOTIFY ?? "http://127.0.0.1:5391/notify";
+const RECENT_MS = 2 * 60 * 60 * 1000;
+const STALE_MS = 15 * 60 * 1000;
+const dry = process.argv.includes("--dry");
+const as = (s) => '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+
+function alive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
+}
+
+function verdict(m, { dead = false, now = Date.now() } = {}) {
+  if (!m || m.mode === "split" || m.closed) return null;
+  if (m.started) return null;
+  if (m.gaveUp) return `放棄了：${m.gaveUp}`;
+  if (m.unconfirmed) return `沒確認開工：${m.unconfirmed}`;
+  const age = now - Date.parse(m.created);
+  if (dead) return "背景程序死了，沒留下結果";
+  // pid 被別的程序重用時 alive 會誤判成活著：超過 15 分鐘（--inject 最多等 10 分鐘＋打字）一律算失敗
+  return age > STALE_MS ? `建立 ${Math.round(age / 60000)} 分鐘還沒結果` : null;
+}
+
+// 至少一個管道送出才回 true；都失敗就不記 .notified，下一分鐘再叫（PR #10 審查）
+function notify(title, body) {
+  let sent = false;
+  if (NOTIFY) {
+    try {
+      execFileSync("curl", ["-sf", "-m", "5", "-X", "POST", NOTIFY, "-H", "content-type: application/json",
+        "-d", JSON.stringify({ title, body, thread: "handoff" })], { stdio: "ignore" });
+      sent = true;
+    } catch { /* 通知服務沒開：還有系統通知 */ }
+  }
+  if (process.env.HANDOFF_NO_OSA !== "1") {
+    try { execFileSync("osascript", ["-e", `display notification ${as(body)} with title ${as(title)}`], { stdio: "ignore", timeout: 5000 }); sent = true; } catch {}
+  }
+  return sent || (!NOTIFY && process.env.HANDOFF_NO_OSA === "1");   // 測試把兩個都關掉時照常記
+}
+
+function main() {
+  if (!existsSync(STATE)) return;
+  const now = Date.now();
+  for (const f of readdirSync(STATE)) {
+    if (!/^[\dT-]+Z\.json$/.test(f)) continue;
+    const base = join(STATE, f.slice(0, -5));
+    if (existsSync(base + ".notified")) continue;
+    // 先看 pid 死活、再讀標記：--inject 結束前一定先寫結果，這個順序下「死了＋沒結果」才不會是讀到一半的競態
+    let pid = null;
+    try { pid = Number(readFileSync(base + ".pid", "utf8").trim()) || null; } catch {}
+    const dead = pid != null && !alive(pid);
+    let m;
+    try { m = JSON.parse(readFileSync(base + ".json", "utf8")); } catch { continue; }
+    if (!(now - Date.parse(m.created) < RECENT_MS)) continue;
+    const why = verdict(m, { dead, now });
+    if (!why) continue;
+    const where = [m.tty, m.cwd].filter(Boolean).join("，");
+    const body = `${why}（${where}）。交接單：${m.handoff}`;
+    if (dry) { console.log(`${f}: ${body}`); continue; }
+    if (!notify(`換手失敗（${m.mode}）`, body)) { console.log(`${new Date().toISOString()} 通知送不出去，下一分鐘再試：${f}`); continue; }
+    writeFileSync(base + ".notified", JSON.stringify({ at: new Date().toISOString(), why }) + "\n");
+    console.log(`${new Date().toISOString()} 叫了 ${f}: ${body}`);
+  }
+}
+
+main();

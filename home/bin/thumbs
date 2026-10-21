@@ -1,0 +1,77 @@
+#!/bin/bash
+# thumbs — 在 iTerm 裡把一批圖排成縮圖總表看（2026-10-21）。
+#
+#   thumbs [-s 邊長] [-c 欄數] [-r] [-o 輸出.png] [資料夾或圖檔...]
+#
+#   不帶參數＝目前資料夾；資料夾展開成裡面的 png／jpg／gif／webp（-r 連子資料夾）。
+#   -s 每格邊長 px（預設 128）、-c 欄數（預設照終端機寬度算）、-o 另存總表（預設丟暫存）。
+#   一次最多 200 張，超過會講出來並只排前 200 張。
+#
+# 合成在 thumbs.swift（只靠 AppKit），第一次跑會編譯到 ~/.cache/thumbs/，原始碼改了自動重編。
+# 不在 iTerm 裡（例如被 Claude Code 叫）就不送圖，只印總表的路徑。
+set -euo pipefail
+
+here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+src="$here/thumbs.swift"
+cache="$HOME/.cache/thumbs"
+bin="$cache/thumbs-$(shasum "$src" | cut -c1-12)"
+
+size=128 cols="" recursive="" out=""
+while getopts "s:c:ro:h" opt; do
+  case $opt in
+    s) size=$OPTARG ;;
+    c) cols=$OPTARG ;;
+    r) recursive=1 ;;
+    o) out=$OPTARG ;;
+    *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 0 ] && set -- .
+
+files=()
+for a in "$@"; do
+  if [ -d "$a" ]; then
+    depth=(-maxdepth 1); [ -n "$recursive" ] && depth=()
+    while IFS= read -r f; do files+=("$f"); done < <(
+      find "$a" "${depth[@]}" -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.gif' -o -iname '*.webp' \) | sort)
+  elif [ -f "$a" ]; then
+    files+=("$a")
+  else
+    echo "thumbs: 找不到 $a" >&2
+  fi
+done
+
+# 沉默不等於成功：0 張就明說
+if [ ${#files[@]} -eq 0 ]; then
+  echo "thumbs: 沒有找到任何圖（$*）" >&2
+  exit 2
+fi
+if [ ${#files[@]} -gt 200 ]; then
+  echo "thumbs: 共 ${#files[@]} 張，只排前 200 張（縮小範圍或指定子資料夾）" >&2
+  files=("${files[@]:0:200}")
+fi
+
+if [ -z "$cols" ]; then
+  # iTerm 一格約 8px 寬（Retina 下總表會被 imgcat 縮到視窗寬，所以這只是大概）
+  term_cols=$(tput cols 2>/dev/null || echo 120)
+  cols=$(( term_cols * 8 / (size + 8) ))
+  [ "$cols" -lt 1 ] && cols=1
+fi
+[ "$cols" -gt ${#files[@]} ] && cols=${#files[@]}
+
+if [ ! -x "$bin" ]; then
+  mkdir -p "$cache"
+  echo "thumbs: 第一次跑，編譯中（約 10 秒）…" >&2
+  swiftc -O -o "$bin.tmp" "$src" && mv "$bin.tmp" "$bin"
+fi
+
+[ -z "$out" ] && out="${TMPDIR:-/tmp}/thumbs-$$.png"
+"$bin" "$out" "$size" "$cols" "${files[@]}"
+
+if [ "${TERM_PROGRAM:-}" = "iTerm.app" ] && [ -t 1 ]; then
+  imgcat -W 100% "$out"
+  echo "${#files[@]} 張 · ${out}"
+else
+  echo "${#files[@]} 張，總表在 ${out}（不在 iTerm 終端機裡，所以沒送圖）"
+fi

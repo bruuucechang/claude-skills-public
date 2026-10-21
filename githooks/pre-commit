@@ -1,0 +1,13 @@
+#!/bin/sh
+# 全域 AGENTS.md 上限 150 行（2026-10-07 裁示；理由見 home/claude/memory/agents-md-history.md）。
+# 看的是「要 commit 的版本」（index），不是工作目錄。
+LIMIT=150
+F=home/claude/AGENTS.md
+git diff --cached --name-only | grep -qx "$F" || exit 0
+N=$(git show ":$F" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$N" -gt "$LIMIT" ]; then
+  echo "✗ $F 有 $N 行，超過上限 $LIMIT 行。" >&2
+  echo "  要加一段，先砍掉等量的一段：數字／事故經過／原話搬進記憶檔，" >&2
+  echo "  情境性的規則搬進帶 paths: 的 rules（Codex 讀不到），或直接刪。" >&2
+  exit 1
+fi

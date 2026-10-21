@@ -1,0 +1,9 @@
+#!/bin/zsh
+# acct-browser — 給 `acct login` 當 BROWSER 用：把 claude 的 OAuth 登入頁開在指定的 Chrome profile。
+#
+# 為什麼需要：這台的 Chrome 有兩個 profile、各自登著不同的 claude.ai 帳號，
+# 直接 `open <網址>` 會落在最後用過的那個 profile，於是拿錯帳號的 session 換憑證回來，
+# 畫面上卻顯示「Login successful」（2026-09-18 連錯兩次）。
+# profile 由 acct 透過 ACCT_CHROME_PROFILE 傳進來（帳號清單的 chrome_profile 欄位）。
+set -eu
+exec open -na "Google Chrome" --args --profile-directory="${ACCT_CHROME_PROFILE:-Default}" "$1"
