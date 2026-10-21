@@ -75,7 +75,7 @@ export function checksFor(event, input, routes = ROUTES) {
 }
 
 /** 公開版拿掉的檢查（多帳號、iTerm）：檔案不在就當作沒有這支，不記錯誤。其他檢查不見照樣記進 dispatch.log。 */
-const OPTIONAL = new Set(['account-check', 'account-drain', 'pane-state']);
+const OPTIONAL = new Set(['account-check', 'account-drain', 'pane-state', 'rate-limit-switch']);
 const absent = () => null;
 
 async function load(name) {

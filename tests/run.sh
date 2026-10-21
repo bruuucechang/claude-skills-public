@@ -286,7 +286,9 @@ done
 # ── handoff-open 開場白預塞資料（2026-10-21 W4）────────────────────────────────
 # 突變測過：拿掉「只注一次」、不比對 pid、不看 clearing 多舊、開場白不附交接單全文，各自都會紅。
 printf '\n  handoff-open 開場白\n\n'
-if out=$( bash "$S/home/bin/test-handoff-open.sh" 2>&1 ); then
+if [ ! -f "$S/home/bin/test-handoff-open.sh" ]; then
+  printf '  · 沒有 handoff-open（公開版拿掉了），跳過\n'
+elif out=$( bash "$S/home/bin/test-handoff-open.sh" 2>&1 ); then
   g "handoff-open 開場白全部通過（$(printf '%s' "$out" | grep -oE '[0-9]+ 過' | tail -1)）"
 else
   b "handoff-open 開場白有失敗" "$(printf '%s' "$out" | grep -A1 '✗' | head -6)"
@@ -295,7 +297,9 @@ fi
 # ── rate-limit-switch：bruce 撞額度上限馬上換到 peter（2026-10-21 W5）─────────────────
 # 突變測過：不看 error、不記「這格換過」、不看換不換得了、反向也換、不看 peter 額度、不補 pane done，各自都會紅。
 printf '\n  rate-limit-switch\n\n'
-if out=$( node "$S/home/claude/hooks/test-rate-limit-switch.mjs" 2>&1 ); then
+if [ ! -f "$S/home/claude/hooks/test-rate-limit-switch.mjs" ]; then
+  printf '  · 沒有 rate-limit-switch（公開版拿掉了），跳過\n'
+elif out=$( node "$S/home/claude/hooks/test-rate-limit-switch.mjs" 2>&1 ); then
   g "rate-limit-switch 案例表全對（$(printf '%s' "$out" | grep -oE '[0-9]+ 過' | tail -1)）"
 else
   b "rate-limit-switch 案例表有錯" "$(printf '%s' "$out" | grep '✗' | head -5)"
