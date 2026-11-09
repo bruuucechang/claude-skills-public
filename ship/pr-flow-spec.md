@@ -48,35 +48,55 @@
 
 ## 機制（規則是請求）
 
-- 全域 pre-push `home/bin/pr-prepush.mjs`（`git config --global hook.pr-guard.*`，bootstrap 會裝）：agent（`CLAUDECODE=1`／`CODEX_THREAD_ID`）
+- 全域 pre-push `home/bin/pr-prepush.mjs`（`git config --global hook.pr-guard.*`，bootstrap 會裝；M5 Pro 要手動，見下面）：agent（`CLAUDECODE=1`／`CODEX_THREAD_ID`）
   把程式碼推進自己 repo 的非 `pr/` 既有分支 → 擋。git 給確切的 ref，不解析指令（PR #1、#2 的審查證明正則補不完）。
   使用者自己在終端機推不擋。
 - `pr-guard` hook（PreToolUse Bash）：只擋跳過 pre-push 的寫法——`--no-verify`（`pr/` 分支除外）與帶路徑的 git（Apple 的 2.50 不跑設定檔的 hook）。
 - Codex 不 commit；改動由我驗收後 `/ship`。
-- 全域 pre-push 裝到哪了（2026-10-21）：Air、mani 已裝；**M5 Pro 待裝**（使用者確認要裝，常被帶出門，離線中）。
+- 全域 pre-push 裝到哪了：Air、mani、M5 Pro 都已裝（Air、mani 沒設 `GIT_CONFIG_GLOBAL`，`--global` 就是 `~/.gitconfig`），也照下面的驗收跑過（M5 Pro 是 2026-10-21 裝的，兩份 gitconfig 都驗過）。
   裝錯不會報錯（指令找不到檔就放行），所以每台都要跑下面的驗收。
   - git 版本門檻 2.55（`pr-guard.mjs` 的 MIN；mani 的 2.51 實測不跑設定檔裡的 hook，升到 2.56 後會跑）。
     要看的是 **agent 的 shell 實際叫到的那支**：`command -v git; git --version`，不只是 `/opt/homebrew/bin/git`；
     PATH 裡 `/usr/bin` 排在前面的話會叫到 Apple 的 2.50。
-  - M5 Pro 的 clone 在 `~/.profiles/bruce/claude-skills`，而且可能還停在 master（`pr-prepush.mjs` 只在 `feature/dataviz-tufte-skills` 上）：
-    先 `fetch`，再 `checkout feature/dataviz-tufte-skills && pull --ff-only`，`ls home/bin/pr-prepush.mjs` 確認檔案在。
-    **之後那份 clone 切回沒有這支檔的分支，hook 會安靜失效**（`pr-guard.mjs` 目前只查有沒有設、不查檔在不在，待補）。
-  - 不要整支跑 bootstrap.sh（會把 manibari profile 的 `~/.claude` 換成 symlink），只跑下面三行。
-    hook 指令的正本是 bootstrap.sh 裡的 `hook.pr-guard.command` 那一行，這裡是把路徑展開後的副本，兩邊不一致時以正本為準：
-    ```bash
-    git config --global hook.pr-guard.event pre-push
-    git config --global hook.pr-guard.command "f='$HOME/.profiles/bruce/claude-skills/home/bin/pr-prepush.mjs'; [ -f \"\$f\" ] && command -v node >/dev/null 2>&1 || { cat >/dev/null; exit 0; }; exec node \"\$f\""
-    chmod +x ~/.profiles/bruce/claude-skills/home/bin/pr-prepush.mjs
+  - M5 Pro 的 clone 在 `~/.profiles/bruce/claude-skills`。`pr-prepush.mjs` 只在 `feature/dataviz-tufte-skills` 上，重裝時先確認在這個分支、`ls home/bin/pr-prepush.mjs` 有檔。
+    （2026-10-21 已切到 `feature/dataviz-tufte-skills`。bruce profile 的 `claude/skills` 是 symlink 到這份 clone，所以切分支會一起換掉它的 skill。）
+    **之後那份 clone 切回沒有這支檔的分支，pre-push 會安靜放行**；`pr-guard.mjs` 會查 `f=` 指的檔在不在，不在就擋下 agent 的 push 並說明（掛了 PreToolUse 的那台才有效）。
+  - 不要整支跑 bootstrap.sh（會把 manibari profile 的 `~/.claude` 換成 symlink），只跑下面這幾行。
+    M5 Pro 的 `~/bin/claude` wrapper 照選的 profile 設 `GIT_CONFIG_GLOBAL`：bruce → `~/.profiles/bruce/gitconfig`、manibari → `~/.profiles/manibari/gitconfig`；
+    已經帶 `CLAUDE_CONFIG_DIR`、或不是 tty（headless）就不設，用 `~/.gitconfig`。**`--global` 寫到哪一份要看當下的環境**，
+    bootstrap.sh 只會寫到當下那份，所以 M5 Pro 用下面的迴圈寫 bruce 的與 `~/.gitconfig` 兩份。manibari 的不裝（不是我們的 repo）。
+    迴圈裡的 hook 指令是 bootstrap.sh 那一行 `hook.pr-guard.command` 把路徑展開後的副本，兩邊不一致時以 bootstrap.sh 為準：
+    ```zsh
+    R=$HOME/.profiles/bruce/claude-skills
+    CMD="f='$R/home/bin/pr-prepush.mjs'; [ -f \"\$f\" ] && command -v node >/dev/null 2>&1 || { cat >/dev/null; exit 0; }; exec node \"\$f\""
+    for F in $HOME/.profiles/bruce/gitconfig $HOME/.gitconfig; do
+      git config --file "$F" --replace-all hook.pr-guard.event pre-push
+      git config --file "$F" --replace-all hook.pr-guard.command "$CMD"
+    done
+    chmod +x $R/home/bin/pr-prepush.mjs
     ```
-  - M5 Pro 上的逃生門是 `touch ~/.profiles/bruce/claude-skills/home/claude/hooks/pr-guard.off`（`pr-guard.off` 跟著 clone 走），
-    擋下時訊息裡寫的 `~/.claude/skills/…` 在那台不對。
-  - `~/.gitconfig` 是 manibari 和 bruce 兩個 profile 共用的，所以 manibari 那邊推的時候也會跑這支 hook。可以接受，因為
-    這次推的 remote 網址 owner 不是 `github_owner` 就放行，任何例外也一律放行。例外：manibari 有 remote 指到 `github_owner` 的 repo 的話會被擋。
+  - M5 Pro 上的逃生門是 `touch ~/.profiles/bruce/claude-skills/home/claude/hooks/pr-guard.off`（`pr-guard.off` 跟著 clone 走，`pr-prepush.mjs` 自己也會讀它）。
+    pr-guard 的擋下訊息照自己的位置印路徑，在那台是對的；`pr-prepush.mjs` 的訊息寫死 `~/.claude/skills/…`，在那台不對。
+  - **M5 Pro 的 PreToolUse `pr-guard` 只掛在 bruce profile**（2026-10-21 補）：`~/.profiles/bruce/claude/settings.json` 是實體檔、不是 symlink 到 repo，
+    手動加一條 `Bash` matcher 跑 `node "$HOME/.profiles/bruce/claude-skills/home/claude/hooks/pr-guard.mjs"`（改前備份成 `settings.json.bak-20261021-prguard`）。
+    同一份裡的 commit-message-guard 原本指到 `~/.claude/skills/…`（manibari 的目錄，沒這支檔，一直安靜失效），同時改成 bruce clone 的路徑。
+    manibari 的 `~/.claude/settings.json` 不掛（不是我們的設定），所以 pr-guard 只在 bruce profile 跑；那時 `GIT_CONFIG_GLOBAL` 不是 bruce 的 gitconfig
+    就是 `~/.gitconfig`，兩份都裝了，`--global --get` 不會誤判成沒裝。**哪天要掛到 manibari profile，pr-guard 會擋下所有推自己 repo 的 push**
+    （它的 gitconfig 沒裝 pre-push，判斷本身沒錯），要先決定那邊裝不裝。
+    這兩支 hook 也是從 bruce clone 跑的：clone 切到沒有它們的分支，hook 會報錯但不擋（跟 pre-push 一樣安靜失效），切分支前先確認。
+    這份 settings.json 不在 repo 裡，重建 profile 時要照這段手動補回來。
+    驗收：開假 remote `<tmp>/bruuucechang/x.git`（路徑要帶 bruce clone `config.json` 的 `github_owner`，不然當成別人的 repo 直接放行）並 clone 出來，把 `{"tool_input":{"command":"git push --no-verify origin master"},"cwd":"<clone>"}` 餵給這支 hook，要回 `deny`。
+    headless `claude -p` 透過 ssh 跑不了：ssh 底下讀不到 Keychain，一律「Not logged in」；要在登入 session 裡跑，用一次性 LaunchAgent（`launchctl bootstrap gui/$(id -u) <plist>`）。
+    **待補（使用者登入後）**：2026-10-21 那樣跑時 bruce 的登入過期（「OAuth session expired」），所以 `claude -p` 叫它 `git push --no-verify` 被擋這一關還沒實測過。
+  - 從 wrapper 選 manibari 啟動時用它自己的 gitconfig，不會跑這支 hook；但 headless 或已經帶 `CLAUDE_CONFIG_DIR` 時用 `~/.gitconfig`，就會跑。
+    可以接受，因為這次推的 remote 網址 owner 不是 `github_owner` 就放行，任何例外也一律放行。
+    例外：manibari 有 remote 指到 `github_owner` 的 repo，用 agent 身分推程式碼進既有分支會被擋。
   - 驗收：`git config --global --get hook.pr-guard.command` 有值，然後在暫存目錄開一個假 remote `<tmp>/<github_owner>/x.git`。
     下面的「人推」一律寫成 `env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CODEX_THREAD_ID git push …`
     （agent 的 shell 本來就帶這些變數）；「agent 推」帶 `CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=t`。
     1. 人推一個只有 `README.md` 的 init 到 master 和 `pr/x`（遠端分支先存在，不然新分支會直接放行，什麼都沒驗到）。
     2. commit 一個 `a.py`：agent 推 master 要印「推被擋下來了」；agent 推 `HEAD:pr/x` 要成功；人推 master 要成功。
+    M5 Pro 上整套（`--get` 和第 1、2 步的推）要 `export GIT_CONFIG_GLOBAL=<那份檔>` 兩份各跑一次，只查 `--get` 不算驗過。
 
 ## 明確不做
 

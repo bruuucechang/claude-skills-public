@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- 反例（U13）：欄位裝不下字。每一格都切掉資料的最後幾個字，text-clipped 要剛好報 8 筆：
+     輸入框的值、有焦點的輸入框的值、輸入框的提示字、裁切的表格格子、沒裁切但超出幾 px 的格子、裁切的標籤、
+     裁切框裡包在連結裡只差幾 px 的帳號、從右往左排的字往左被裁掉。
+     另外 inline 元素寫 overflow:hidden 沒有作用、字衝出段落，要由 text-overflow 報（不能兩條都漏） -->
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>欄位裝不下字</title>
+<style>
+  body { margin: 0; padding: 24px; font: 16px/1.5 ui-monospace, Menlo, monospace; background: #fff; color: #222; }
+  input { font: inherit; padding: 2px 4px; border: 1px solid #888; }
+  .narrow { width: 120px; }
+  .tiny { width: 80px; }
+  table { border-collapse: collapse; }
+  .fixed { table-layout: fixed; width: 200px; }
+  .fixed td { width: 100px; overflow: hidden; white-space: nowrap; border: 1px solid #ccc; padding: 0; }
+  .stack td { display: block; width: 100px; white-space: nowrap; border: 1px solid #ccc; padding: 0; }
+  .para { width: 100px; }
+  .acct { width: 140px; overflow: hidden; white-space: nowrap; }
+  .rtl { width: 100px; overflow: hidden; white-space: nowrap; }
+  .oh { overflow: hidden; white-space: nowrap; }
+  .tag { display: inline-block; width: 60px; overflow: hidden; white-space: nowrap; vertical-align: top; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>欄位裝不下字</h1>
+    <p><input class="narrow" type="text" aria-label="帳號" value="台新銀行 0123-4567-8901" /></p>
+    <p><input class="narrow" type="text" aria-label="匯入銀行" autofocus value="中國信託 9876-5432-1098" /></p>
+    <p><input class="tiny" type="text" aria-label="備註" placeholder="例如：向阿明借的那一筆" /></p>
+    <table class="fixed"><tbody><tr><td>CTBC-1234567890</td><td>短</td></tr></tbody></table>
+    <table class="stack"><tbody><tr><td>ABCDEFGHIJK</td></tr></tbody></table>
+    <p><span class="tag">很長的分類標籤</span></p>
+    <div class="acct">帳號：<a href="#">0123-45678</a></div>
+    <div class="rtl" dir="rtl">שלום עולם זהו טקסט ארוך מאוד</div>
+    <p class="para"><span class="oh">這一段行內字寫了 overflow hidden 但沒有作用</span></p>
+  </main>
+</body>
+</html>

@@ -1,0 +1,272 @@
+/* app.css —— 共用骨架：版面、面板、數字列、按鈕、表單、表格、徽章、各種畫面狀態
+ *
+ * 只引用 tokens.css 的變數，這個檔裡不准出現色碼。
+ * 專案自己的元件寫在自己的 CSS，一樣只用變數；這裡的 class 不夠用再加，不要覆寫。
+ * 每一條為什麼長這樣寫在 app-design skill。
+ */
+
+/* ── 版面 ─────────────────────────────────────────────────────────── */
+.app {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5) var(--space-8);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);   /* 一欄、不准被裡面的長字撐寬（撐寬了手機整頁橫捲） */
+  gap: var(--space-5);
+}
+
+/* 標題列：一個名詞當標題，旁邊放這個畫面真的有的動作與資料時間 */
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.page-head .sub { color: var(--muted); font-size: var(--fs-meta); margin-top: var(--space-1); }
+.actions { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+
+.grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;   /* 卡片不准被拉成鄰居的高度、底下留一條空白 */
+}
+
+/* ── 面板：邊框或陰影二選一，這裡選邊框 ───────────────────────────── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--space-5);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);   /* 同上：單行省略號的清單列會把 auto 欄撐到字的全長 */
+  gap: var(--space-4);
+  align-content: start;
+  min-width: 0;
+}
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.panel-head :is(h2, h3) { font-size: var(--fs-card); }
+.panel-head .meta { color: var(--faint); font-size: var(--fs-meta); }
+
+/* ── 數字列：一個容器用細線分格，不是一個數字一張卡 ───────────────── */
+.kpis {
+  display: grid;
+  grid-auto-flow: column;    /* 一列 1–6 個、永遠一列；換行會讓分隔線錯位 */
+  grid-auto-columns: 1fr;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+.kpi { padding: var(--space-4) var(--space-5); display: grid; gap: var(--space-1); min-width: 0; }
+.kpi + .kpi { border-left: 1px solid var(--rule); }
+.kpi .label { color: var(--muted); font-size: var(--fs-meta); }
+.kpi .value {
+  font-size: var(--fs-title);
+  line-height: var(--lh-tight);
+  font-weight: var(--fw-regular);
+  font-variant-numeric: tabular-nums;
+}
+.kpi .value.lead { font-size: var(--fs-lead); font-weight: var(--fw-medium); }
+.kpi .unit { color: var(--muted); font-size: var(--fs-body); margin-left: 2px; }
+.kpi .delta { font-size: var(--fs-meta); color: var(--muted); }
+.delta.good { color: var(--positive); }
+.delta.bad  { color: var(--negative); }
+
+/* ── 按鈕：預設是安靜的；主要動作一個畫面一顆，主色底 ─────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: var(--control-h);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--control);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.btn.primary { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }
+.btn.accent { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.text { border-color: transparent; background: transparent; color: var(--muted); padding: 0 var(--space-2); }
+/* 指到才有的樣子：只給有滑鼠的裝置（iOS 點過會黏著），停用的不變（.btn.primary:hover 比 .btn:disabled 重，U10 踩到）*/
+@media (hover: hover) {
+  .btn:hover:not(:disabled) { background: var(--raised); }
+  /* 退回 --primary：舊專案只換了 app.css、tokens.css 還沒有 --primary-hover 時不會變透明 */
+  .btn.primary:hover:not(:disabled) { background: var(--primary-hover, var(--primary)); }
+  .btn.accent:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); }   /* 不寫的話上面 .btn:hover 會蓋成淺灰底白字 */
+  .btn.text:hover:not(:disabled) { color: var(--text); background: var(--raised); }
+}
+a.btn, a.btn:hover { text-decoration: none; }   /* 連結做成的按鈕不出底線 */
+.btn.danger { color: var(--negative); }
+.btn.sm { height: var(--control-h-sm); padding: 0 var(--space-3); font-size: var(--fs-meta); }
+/* 停用的按鈕要讀得到字，旁邊用 .hint 講為什麼不能按 */
+.btn:disabled { cursor: not-allowed; color: var(--faint); background: var(--raised); border-color: var(--border); }
+
+/* ── 表單：標籤在欄位上面，不用 placeholder 代替標籤 ──────────────── */
+.field { display: grid; gap: var(--space-2); }
+.field > label { font-weight: var(--fw-medium); }
+.hint  { color: var(--muted); font-size: var(--fs-meta); }
+.error { color: var(--negative); font-size: var(--fs-meta); }
+.input, .select, .textarea {
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--control);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+}
+.textarea { height: auto; min-height: calc(var(--control-h) * 3); padding: var(--space-2) var(--space-3); line-height: var(--lh-cell); }
+.input::placeholder, .textarea::placeholder { color: var(--faint); }
+.input[aria-invalid="true"] { border-color: var(--negative); }
+.row-form { display: flex; gap: var(--space-3); align-items: start; }
+/* 按鈕對齊輸入框而不是標籤：往下推一行標籤＋間距（欄位下面有錯誤訊息時也不會歪）*/
+.row-form > .btn { margin-top: calc(var(--fs-body) * var(--lh-body) + var(--space-2)); }
+.row-form > .field, .row-form > .input { flex: 1; min-width: 0; }
+
+/* ── 表格：靠列線與對齊，不要斑馬紋、不要大寫表頭色帶 ─────────────── */
+.table-wrap { overflow-x: auto; }   /* 非得維持表格時，橫向捲動只在這個框裡 */
+.table { width: 100%; border-collapse: collapse; line-height: var(--lh-cell); }
+.table th {
+  text-align: left;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  color: var(--muted);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+/* 權重要比 .table th 高：只靠 tokens.css 的 th.num（權重一樣、又比較早載入）會被上面蓋回靠左（U5、U6 都踩到） */
+.table th.num { text-align: right; }
+.table td { padding: var(--space-3); border-bottom: 1px solid var(--rule); height: var(--row-h); }
+.table tr:last-child td { border-bottom: 0; }
+.table td.id { font-weight: var(--fw-medium); }
+.table .sub { display: block; color: var(--muted); font-size: var(--fs-meta); }
+
+/* 清單：一列一件事，名稱與關鍵數字同一行 */
+.list { list-style: none; margin: 0; padding: 0; }
+.list > li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--row-h);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.list > li:last-child { border-bottom: 0; }
+/* 預設換行：說明、紀錄被省略號切掉就讀不到（U11）；只有名稱這種短字才加 .one-line */
+.list .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.list .grow.one-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 清單裡的空狀態：上面兩條會吃掉 .empty 的虛線框與內距（U11） */
+.list > li.empty, .list > li.empty:last-child { border: 1px dashed var(--control); padding: var(--space-4) var(--space-5); }
+
+/* ── 徽章：淡底深字、同一個色相；只放在列裡或數值旁 ───────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-chip);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  background: var(--raised);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pill.positive { background: var(--pill-positive-bg); color: var(--positive); }
+.pill.negative { background: var(--pill-negative-bg); color: var(--negative); }
+.pill.warning  { background: var(--pill-warning-bg);  color: var(--warning); }
+
+/* ── 畫面狀態：空、載入、錯誤、過期 ───────────────────────────────── */
+
+/* 缺值是灰色短橫線；真的零照常印 0 */
+.dash { color: var(--faint); }
+
+/* 空：保留框與標題，一句話＋下一步，橫跨整個區塊 */
+.empty {
+  grid-column: 1 / -1;
+  border: 1px dashed var(--control);
+  border-radius: var(--radius-card);
+  padding: var(--space-4) var(--space-5);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* 載入：最終版面先畫好，數值換成同大小的灰條，不閃、資料到了版面不跳 */
+.skeleton {
+  display: inline-block;
+  height: 1em;
+  min-width: 4em;
+  border-radius: var(--radius-chip);
+  background: var(--raised);
+  vertical-align: middle;
+}
+
+/* 錯誤：出在哪一塊就顯示在哪一塊，一句話講什麼壞了＋重試 */
+.error-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text);
+}
+.error-inline::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--negative);
+  flex: none;
+}
+.error-inline > .msg { flex: 1; min-width: 0; }
+
+/* 資料是快照、不會自己更新：一行安靜的提示 */
+.notice {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--notice-border);
+  border-radius: var(--radius-control);
+  background: var(--pill-warning-bg);
+  color: var(--warning);
+  font-size: var(--fs-meta);
+}
+
+/* 只給螢幕閱讀器看的字（例如只有圖示的按鈕的名稱） */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ── 手機：導覽收起、數字列兩欄、點擊目標 44px ─────────────────────── */
+@media (max-width: 640px) {
+  .app { padding: var(--space-4) var(--space-4) var(--space-7); gap: var(--space-4); }
+  h1 { font-size: var(--fs-section); }
+  .panel { padding: var(--space-4); }
+  .kpis { grid-auto-flow: row; grid-template-columns: 1fr 1fr; }
+  .kpi { padding: var(--space-3) var(--space-4); }
+  .kpi + .kpi { border-left: 0; }
+  .kpi:nth-child(even) { border-left: 1px solid var(--rule); }
+  .kpi:nth-child(n + 3) { border-top: 1px solid var(--rule); }
+  .kpi:last-child:nth-child(odd) { grid-column: 1 / -1; }   /* 單數個時最後一格佔滿 */
+  .btn, .input, .select { height: var(--touch); }
+  .btn.sm { height: var(--touch); }
+  .row-form { flex-direction: column; align-items: stretch; }
+  .row-form > .btn { margin-top: 0; }
+}

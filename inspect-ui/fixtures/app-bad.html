@@ -1,0 +1,70 @@
+<!doctype html>
+<!-- 反例：design-scan 的工具畫面類與無障礙類每一條都要在這頁抓到（期望值在 expect.json） -->
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>反例</title>
+<style>
+  body { margin: 0; font-family: -apple-system, "PingFang TC", sans-serif; background: #fff; color: #222; }
+  nav.side { position: fixed; left: 0; top: 0; width: 300px; height: 100vh; background: #f2f2f2; }
+  nav.side a { display: block; padding: 10px 16px; color: #222; }
+  main { margin-left: 300px; padding: 20px; max-width: 500px; }
+  h1 { font-size: 52px; margin: 0 0 16px; }
+  .kpi { font-size: 56px; font-weight: 600; }
+  .row { display: flex; gap: 20px; align-items: flex-start; }
+  .card { width: 240px; padding: 16px; margin-bottom: 16px; background: #fff; border: 1px solid #333; }
+  .r2 { border-radius: 2px; } .r6 { border-radius: 6px; } .r12 { border-radius: 12px; } .r20 { border-radius: 20px; }
+  .tall { height: 300px; }
+  .float { box-shadow: 0 10px 30px rgba(0, 0, 0, .3); }
+  table td { text-align: left; padding: 4px 8px; }
+  .btn { transition: transform .2s; padding: 6px 10px; }
+  .btn:hover { transform: translateY(-1px); }
+  button:focus { outline: none; }
+  .sizes span { display: block; }
+</style>
+</head>
+<body>
+  <nav class="side"><a href="#">總覽</a><a href="#">訂單</a><a href="#">客戶</a><a href="#">設定</a></nav>
+  <main>
+    <h1>訂單管理後台總覽</h1>
+    <div class="kpi">1,234 元</div>
+    <div class="row">
+      <section class="card r2 float"><h2>短的</h2><p>王小明 · Acme Inc</p></section>
+      <section class="card r2 tall"><h2>長的</h2><p>只有一行字。</p></section>
+    </div>
+    <div class="row">
+      <section class="card r6"><p>六</p></section>
+      <section class="card r6"><p>六</p></section>
+    </div>
+    <div class="row">
+      <section class="card r12"><p>十二</p></section>
+      <section class="card r12"><p>十二</p></section>
+    </div>
+    <div class="row">
+      <section class="card r20"><p>二十</p></section>
+      <section class="card r20"><p>二十</p></section>
+    </div>
+    <table>
+      <tr><td>1,200 元</td><td>35 筆</td><td>NT$ 3,400</td></tr>
+      <tr><td>12.5%</td><td>8 件</td><td>1.2 萬元</td></tr>
+    </table>
+    <svg width="300" height="120" viewBox="0 0 300 120">
+      <rect x="0" y="20" width="30" height="100" fill="#e53935" /><rect x="40" y="30" width="30" height="90" fill="#fb8c00" />
+      <rect x="80" y="40" width="30" height="80" fill="#fdd835" /><rect x="120" y="10" width="30" height="110" fill="#43a047" />
+      <rect x="160" y="50" width="30" height="70" fill="#00acc1" /><rect x="200" y="60" width="30" height="60" fill="#1e88e5" />
+      <rect x="240" y="30" width="30" height="90" fill="#8e24aa" />
+    </svg>
+    <div class="sizes">
+      <span style="font-size:11px">十一</span><span style="font-size:13px">十三</span><span style="font-size:15px">十五</span>
+      <span style="font-size:17px">十七</span><span style="font-size:19px">十九</span><span style="font-size:21px">廿一</span>
+      <span style="font-size:23px">廿三</span><span style="font-size:25px">廿五</span><span style="font-size:27px">廿七</span>
+    </div>
+    <p>
+      <button class="btn" type="button">×</button>
+      <a href="#" class="icon"><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="#222" /></svg></a>
+      <button class="btn" type="button">儲存</button>
+    </p>
+  </main>
+</body>
+</html>

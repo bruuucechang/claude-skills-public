@@ -15,7 +15,8 @@
  *   · 那段帶 --no-verify，但推的不是 pr/ 分支（refspec 寫明 pr/，或在 pr/ 分支上推 HEAD）。
  *     animyria 推 PR 分支照 ship 5b 帶 --no-verify，pre-push 的長測試由 pushq 在合併前跑。
  *   · 那段實際執行的 git 不到 2.55（`/usr/bin/git`、`xcrun git` 是 Apple 的 2.50，不跑設定檔掛的 hook；2026-10-21 實測）。
- *   · mac 上全域 `hook.pr-guard.command` 沒設（還沒跑 bootstrap）。Windows 不在這次範圍。
+ *   · mac 上全域 `hook.pr-guard.command` 沒設（還沒跑 bootstrap），或它 `f=` 指的不是檔（clone 切了分支，pre-push 會安靜放行）。
+ *     Windows 不在這次範圍。
  * pushq 登記的 repo 推 master 另有 pushq-guard。
 
  * ## 威脅模型：防手滑，不防故意
@@ -29,7 +30,7 @@
  *     touch ~/.claude/skills/home/claude/hooks/pr-guard.off
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appendLog } from './lib/log.mjs';
@@ -62,6 +63,18 @@ function toPr(seg, dirs) {
   return dirs.some((d) => { try { return git(d, ['branch', '--show-current'], 2000).startsWith('pr/'); } catch { return false; } });
 }
 
+/** 全域 pre-push 沒裝好的理由；null＝裝好了。
+ *  只查有沒有設不夠：bootstrap 那行指令找不到 `f=` 指的檔就放行，所以那份 clone 切到沒有
+ *  pr-prepush.mjs 的分支後 hook 會安靜失效（M5 Pro 的 clone 會切分支，2026-10-21）。 */
+export function prepushMissing(cwd) {
+  let cmd;
+  try { cmd = git(cwd, ['config', '--global', '--get', 'hook.pr-guard.command'], 2000); }
+  catch { return '這台還沒裝全域 pre-push（hook.pr-guard.*），直推程式碼不會被擋。先跑 repo 根目錄的 install.sh（私人版是 bootstrap.sh）設好 hook.pr-guard.*。'; }
+  const f = cmd.match(/\bf='([^']+)'/)?.[1];
+  if (f && !statSync(f, { throwIfNoEntry: false })?.isFile()) return `全域 pre-push 指到的 ${tilde(f)} 不在（那份 clone 切到沒有這支檔的分支？），hook 會安靜放行。切回有這支檔的分支，或重跑 bootstrap.sh 指到現在的 clone。`;
+  return null;
+}
+
 /** 回 null＝放行。 */
 export function run(input) {
   // pr_guard: false＝這台沒裝全域 pre-push（install.sh 遇到 git 不到 2.55 時寫的），整支不動作：
@@ -84,8 +97,8 @@ export function run(input) {
     if (!hookCapable(bin)) why.push(`這段用的 ${bin} 不到 git ${MIN.join('.')}，不跑設定檔掛的 pre-push（/usr/bin/git 是 Apple 的 2.50）。用 PATH 上的 Homebrew git。`);
   }
   if (process.platform === 'darwin') {
-    try { git(cwd, ['config', '--global', '--get', 'hook.pr-guard.command'], 2000); }
-    catch { why.push('這台還沒裝全域 pre-push（hook.pr-guard.*），直推程式碼不會被擋。先跑 repo 根目錄的 install.sh（私人版是 bootstrap.sh）設好 hook.pr-guard.*。'); }
+    const missing = prepushMissing(cwd);
+    if (missing) why.push(missing);
   }
   if (!why.length) return null;
 

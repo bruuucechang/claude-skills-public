@@ -16,6 +16,7 @@
 - 專門工作交給 subagent（office 角色的出差版）：`ui-verifier`、`reviewer`、`researcher`、`dispatcher`。
   照規格寫東西的苦工派 `writer`（Sonnet）、判斷／審查才用 Opus；素材先切好，一個子代理 5～10 項就交回。
   派 `general-purpose` 沒寫 `model`、或同一則訊息派 4 個以上 `model: "opus"` 的 `general-purpose`，會被 `agent-model-guard` 擋（[[subagent-token-burn]]）。
+  子代理說「做完了／過了」不算數：自己看 `git diff` 與驗收指令的輸出再回報。
 
 ## 瀏覽器：五條硬規則（沒讀前端檔就決定開瀏覽器時也成立）
 

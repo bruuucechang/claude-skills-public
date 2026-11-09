@@ -11,6 +11,7 @@ process.env.CLAUDE_SKILLS_CONFIG = f;
 
 const { run: author } = await import('./git-author-guard.mjs');
 const { run: lang } = await import('./lang-guard.mjs');
+const { run: zh } = await import('./zh-guard.mjs');
 const { isMine } = await import('./lib/shell-git.mjs');
 const { checksFor, runChecks } = await import('./dispatch.mjs');
 
@@ -19,6 +20,7 @@ const check = (ok, label) => { console.log(`${ok ? '✓' : '✗'} ${label}`); if
 
 check(author({ tool_input: { command: 'git commit -m x' }, cwd: process.cwd() }) === null, '沒設 git_emails：不擋 commit');
 check(lang({ last_assistant_message: 'This is a long English report. '.repeat(20) }) === null, 'language 沒設：不擋英文');
+check(zh({ stop_reason: 'end_turn', last_assistant_message: '我重新查了一遍现况。' }) === null, 'language 沒設：不擋簡體字');
 check(isMine('https://github.com/octocat/x.git') === false, '沒設 github_owner：沒有 repo 算自己的');
 const r = await runChecks('X', {}, { log: false, checks: [{ name: 'no-such-check', timeout: 1000 }] });
 check(r.length === 0, '路由裡的檢查檔不存在：安靜跳過');

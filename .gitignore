@@ -16,6 +16,7 @@
 # hook 的執行期記錄與逃生門開關（本機狀態，不是原始碼）
 home/claude/hooks/*.log
 home/claude/hooks/*.off
+home/claude/hooks/zh-guard.seen.json
 home/claude/hooks/*.log.pruned
 home/claude/hooks/*.log.prune-lock
 

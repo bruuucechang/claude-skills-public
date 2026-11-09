@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """cx — 讓 Claude Code 在背景 tmux 裡驅動 Codex 互動畫面。規格見同目錄 SPEC.md。
 
-  cx.py start <專案目錄>          建／找 tmux session codex-<名>（不開視窗；要看自己 tmux attach -t <名>）
+  cx.py start <專案目錄> [級]     建／找 tmux session codex-<名>（不開視窗；要看自己 tmux attach -t <名>）
+                                  級＝雜事／一般／難題（見 TIERS）；不寫＝session 活著就沿用、新開用一般
+                                  session 活著且級不同 → 換模型接續同一個對話（回合進行中會拒絕）
+  cx.py up    <名>                升一級（退回第 1 次時用）：換模型、接續同一個對話
   cx.py send  <名> <工作單檔>     把工作單貼進 Codex 並送出
   cx.py wait  <名> [逾時秒]       等這一輪結束；印出 Codex 最後的回覆與 context 用量
                                   退出碼 0 成功／2 崩潰／3 逾時／4 帶錯誤結束／5 暫時性錯誤可重送／6 停滯（多半卡在提示）
@@ -24,6 +27,13 @@ SKILLS_OFF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worker-sk
 DOC_MAX = 32 * 1024               # Codex 的 project_doc_max_bytes 預設值；超過的部分安靜截掉
 STALL_SEC = 900                   # rollout 15 分鐘沒寫入＝多半卡在提示；只是長指令就再 wait 一次
 NO_ROLLOUT_SEC = 120              # 送出 2 分鐘還沒建 rollout＝工作單沒送進去（多半停在開場提示）
+# 工作強度分級（2026-10-27 使用者裁示：品質為主，三級＋退回第 1 次就升一級）。
+# 預設維持 Astra；只有雜事降到 Terra。gpt-6.1-terra 要 CLI ≥ 0.159。
+TIERS = {"雜事": ("gpt-6.1-terra", "medium"),   # 改名、格式、文件、交接摘要、轉換
+         "一般": ("gpt-6-astra", "medium"),     # 單一功能、有重現步驟的 bug
+         "難題": ("gpt-6-astra", "xhigh")}      # 跨模組、架構、沒頭緒的除錯
+TIER_ORDER = ["雜事", "一般", "難題"]
+DEFAULT_TIER = "一般"
 TRANSIENT = ("at capacity", "stream disconnected", "overloaded")   # 2026-10-07／09 兩次「Selected model is at capacity」，重送就好
 
 
@@ -165,13 +175,16 @@ def close_window(st):
                        capture_output=True)
 
 
-def spawn_reaper(name):
-    """背景守門：tmux 還活著但 rollout 閒置超過 IDLE_KILL_SEC 就結束它；session 沒了它自己退出。"""
+def spawn_reaper(name, launch_id):
+    """背景守門：tmux 還活著但 rollout 閒置超過 IDLE_KILL_SEC 就結束它；session 沒了、或換級重開過（launch 變了）它自己退出。"""
     code = f"""
 import os,time,subprocess,json
-n={name!r}; sp={state_path(name)!r}; lim={IDLE_KILL_SEC}
+n={name!r}; sp={state_path(name)!r}; lim={IDLE_KILL_SEC}; me={launch_id!r}
 while subprocess.run(['tmux','has-session','-t',n],capture_output=True).returncode==0:
-    try: st=json.load(open(sp)); f=st.get('rollout'); t=os.path.getmtime(f) if f else st['started']
+    try:
+        st=json.load(open(sp))
+        if st.get('launch', me)!=me: break
+        f=st.get('rollout'); t=os.path.getmtime(f) if f else st['started']
     except Exception: t=time.time()
     if time.time()-t>lim:
         subprocess.run(['tmux','kill-session','-t',n]); break
@@ -181,24 +194,91 @@ while subprocess.run(['tmux','has-session','-t',n],capture_output=True).returnco
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def cmd_start(path):
+def model_args(tier):
+    model, effort = TIERS[tier]
+    return ["-m", model, "-c", f"model_reasoning_effort={effort}"]
+
+
+def session_id(f):
+    try:
+        with open(f) as fh:
+            return json.loads(fh.readline()).get("payload", {}).get("id")
+    except (OSError, ValueError):
+        return None
+
+
+def launch(name, st, argv):
+    sh("tmux", "new-session", "-d", "-s", name, "-x", "160", "-y", "48", "-c", st["cwd"], shlex.join(argv))
+    sh("tmux", "set-option", "-t", name, "remain-on-exit", "on")   # Codex 崩潰時畫面留著看得到原因
+    st["launch"] = f"{time.time():.3f}"
+    save(name, st)                          # 先存 launch，舊的 reaper 看到不是自己就退出
+    spawn_reaper(name, st["launch"])
+    # resume 帶錯 id 時 Codex 會先畫出輸入框、約 1 秒後才退出（2026-10-27 實測），所以畫面出來後再多看 3 秒
+    for _ in range(30):
+        time.sleep(0.5)
+        screen = subprocess.run(["tmux", "capture-pane", "-p", "-t", name], capture_output=True, text=True).stdout
+        if pane_dead(name) or "for shortcuts" in screen or "Trust" in screen:   # 信任資料夾提示交給呼叫端按
+            break
+    time.sleep(3)
+    if pane_dead(name):                     # resume 帶錯 id／舊版 CLI 不認模型：Codex 一啟動就退出
+        print(subprocess.run(["tmux", "capture-pane", "-p", "-t", name], capture_output=True, text=True).stdout)
+        subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)   # 不留死 pane，下次 start 才會重開
+        sys.exit(f"!! {name} 啟動後馬上結束（畫面在上面），session 已收掉")
+
+
+def switch_tier(name, st, tier):
+    """換模型接續同一個對話：關掉 tmux，用 codex resume <id> -m … 重開。還沒有對話就直接用新級重開。"""
+    f = rollout(name, st)
+    if st.get("sent") and (not f or scan(f)[0] <= st.get("done_before", 0)) and tmux_alive(name) and not pane_dead(name):
+        sys.exit(f"!! {name} 這一輪還沒結束，現在換級會砍掉做到一半的工作；先 cx wait {name}")
+    sid = session_id(f) if f else None
+    st["launch"] = "switching"              # 先讓舊 reaper 看到不是自己，再 kill（避免它在空窗收掉新 session）
+    save(name, st)
+    subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+    st["tier"] = tier
+    if sid:
+        launch(name, st, ["codex", "resume", sid, *model_args(tier), *skills_off_arg()])
+    else:
+        st["started"] = time.time()
+        st.pop("rollout", None)
+        launch(name, st, ["codex", *model_args(tier), *skills_off_arg()])
+    print(f"換成 {tier}：{' '.join(TIERS[tier])}" + ("（接續同一個對話）" if sid else ""), file=sys.stderr)
+
+
+def cmd_start(path, tier=None):
+    if tier is not None and tier not in TIERS:
+        sys.exit(f"級只能是 {'／'.join(TIER_ORDER)}，收到：{tier}")
     cwd = os.path.realpath(os.path.expanduser(path))
     if not os.path.isdir(cwd):
         sys.exit(f"沒有這個目錄：{cwd}")
     name = "codex-" + os.path.basename(cwd).replace(".", "_")
-    st = load(name)
+    st = load(name) or {"cwd": cwd, "started": time.time()}   # 狀態檔不見但 session 還活著
+    if tmux_alive(name) and pane_dead(name):
+        subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
     if not tmux_alive(name):
-        st = {"cwd": cwd, "started": time.time()}
+        st = {"cwd": cwd, "started": time.time(), "tier": tier or DEFAULT_TIER}
         check_agents_md(cwd)
-        sh("tmux", "new-session", "-d", "-s", name, "-x", "160", "-y", "48", "-c", cwd,
-           shlex.join(["codex", *skills_off_arg()]))
-        sh("tmux", "set-option", "-t", name, "remain-on-exit", "on")   # Codex 崩潰時畫面留著看得到原因
-        spawn_reaper(name)
+        launch(name, st, ["codex", *model_args(st["tier"]), *skills_off_arg()])
+    elif tier and st.get("tier", DEFAULT_TIER) != tier:
+        switch_tier(name, st, tier)
     # 不開 Terminal 視窗（2026-10-11 使用者裁示：工作不准搶畫面）。
     # 他的四宮格就是 Terminal，do script 開的新視窗一定跳到最前面、還會被 quad 重排。
     save(name, st)
     print(name)
+    print(f"級：{st.get('tier', DEFAULT_TIER)}（{' '.join(TIERS[st.get('tier', DEFAULT_TIER)])}）", file=sys.stderr)
     print(f"要看畫面：tmux attach -t {name}", file=sys.stderr)
+
+
+def cmd_up(name):
+    st = need(name)
+    cur = st.get("tier", DEFAULT_TIER)
+    i = TIER_ORDER.index(cur)
+    if i == len(TIER_ORDER) - 1:
+        print(f"已經是最高級（{cur}），不換模型")
+        return
+    switch_tier(name, st, TIER_ORDER[i + 1])
+    save(name, st)
+    print(TIER_ORDER[i + 1])
 
 
 def need(name):
@@ -242,7 +322,7 @@ def cmd_wait(name, timeout="3600"):
         if f:
             done, msg, err, ctx, _ = scan(f)
             if done > before:
-                print(f"== 這一輪結束  context {'未知' if ctx is None else f'{ctx}%'}" + ("  → 已達換新對話門檻" if ctx and ctx >= HANDOFF_PCT else ""))
+                print(f"== 這一輪結束  級 {st.get('tier', DEFAULT_TIER)}  context {'未知' if ctx is None else f'{ctx}%'}" + ("  → 已達換新對話門檻" if ctx and ctx >= HANDOFF_PCT else ""))
                 if err:
                     print(f"!! 錯誤：{err}")
                 transient = bool(err) and any(k in err.lower() for k in TRANSIENT)
@@ -267,7 +347,7 @@ def cmd_status(name):
     st = need(name)
     alive = tmux_alive(name) and not pane_dead(name)
     f = rollout(name, st)
-    print(f"session {'活著' if alive else '已結束'}  rollout {f or '尚未建立'}")
+    print(f"session {'活著' if alive else '已結束'}  級 {st.get('tier', DEFAULT_TIER)}（{' '.join(TIERS[st.get('tier', DEFAULT_TIER)])}）  rollout {f or '尚未建立'}")
     if f:
         done, _, err, ctx, lim = scan(f)
         print(f"已完成 {done} 輪  context {'未知' if ctx is None else f'{ctx}%'}  門檻 {HANDOFF_PCT}%")
@@ -304,7 +384,7 @@ def cmd_kill(name):
 
 
 if __name__ == "__main__":
-    cmds = {"start": cmd_start, "send": cmd_send, "wait": cmd_wait, "status": cmd_status,
+    cmds = {"start": cmd_start, "up": cmd_up, "send": cmd_send, "wait": cmd_wait, "status": cmd_status,
             "screen": cmd_screen, "keys": cmd_keys, "close-window": cmd_close_window, "kill": cmd_kill}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         sys.exit(__doc__)

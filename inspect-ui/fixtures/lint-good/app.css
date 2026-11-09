@@ -1,0 +1,6 @@
+/* 正例：只用變數；有焦點樣式、有 reduced-motion */
+:root { --ring: #1a5fb4; }
+.card { background: var(--ground); transition: transform .2s; min-height: 100dvh; }
+.card:focus-visible { outline: 2px solid var(--ring); }
+@media (prefers-reduced-motion: reduce) { .card { transition: none; } }
+a[href="#top"] { color: var(--accent); }

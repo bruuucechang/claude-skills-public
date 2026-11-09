@@ -8,6 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const DAYS = Number(process.argv[2] || 30);
 const HOME = os.homedir();
@@ -30,6 +31,42 @@ function projFromPath(p) {
   while ((m = PROJ_RE.exec(p)) !== null) if (!SKIP.has(m[1])) last = m[1];
   return last;
 }
+
+// ---- 依工具分帳：tool_use 記下「呼叫形狀」，tool_result 回來時算它塞了多少進 context ----
+// 規則抄自 caveman 的 detect_tool_portfolio.go：Bash 剝掉 `cd … &&`、Read/Write/Edit 只留副檔名。
+// **本機估算不是計費**：文字 4 字元算 1 token、圖片一張算 1,600 token（上限的量級）。
+const SUBCMD = new Set(['git', 'npm', 'npx', 'pnpm', 'yarn', 'gh', 'docker', 'cargo', 'go', 'brew', 'uv', 'pip', 'pip3', 'proj', 'tmux', 'launchctl']);
+const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'NotebookEdit']);
+export function toolShape(name, input = {}) {
+  if (FILE_TOOLS.has(name)) {
+    const ext = path.extname(String(input.file_path || input.notebook_path || '')).toLowerCase();
+    return `${name}(${ext ? '*' + ext : '無副檔名'})`;
+  }
+  if (name !== 'Bash') return name;
+  let c = String(input.command || '').trim();
+  for (let prev = null; prev !== c;) {
+    prev = c;
+    c = c.replace(/^cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*(?:&&|;)\s*/, '')   // cd … && / cd … ;
+         .replace(/^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+/, ''); // FOO=bar 前綴
+  }
+  const t = c.split(/\s+/).filter(Boolean);
+  if (!t.length) return 'Bash()';
+  const head = path.basename(t[0]);
+  let i = 1;
+  if (head === 'git') while (t[i] === '-C' || t[i] === '-c') i += 2;
+  const sub = SUBCMD.has(head) && /^[a-z][\w-]*$/.test(t[i] || '') ? ' ' + t[i] : '';
+  return `Bash(${head}${sub})`;
+}
+const IMAGE_TOKENS = 1600;
+function resultTokens(content) {
+  if (typeof content === 'string') return Math.ceil(content.length / 4);
+  if (!Array.isArray(content)) return 0;
+  let n = 0;
+  for (const b of content) n += b?.type === 'image' ? IMAGE_TOKENS : Math.ceil(String(b?.text || '').length / 4);
+  return n;
+}
+const shapeOf = new Map();  // tool_use id -> 形狀
+const toolShapes = new Map(); // 形狀 -> {calls, tokens}
 
 const stats = new Map();   // proj -> {in,out,cacheRead,cacheCreate,turns,sessions:Set}
 const sessions = new Map();// sessionId -> {proj,total,turns,first,last,cwd,mentions:Map}
@@ -72,6 +109,20 @@ async function scanFile(file) {
         if (SKIP.has(m[1]) || seen.has(m[1])) continue;
         seen.add(m[1]);
         sess.mentions.set(m[1], (sess.mentions.get(m[1]) || 0) + 1);
+      }
+    }
+
+    const content = e.message?.content;
+    if (Array.isArray(content)) for (const it of content) {
+      if (it?.type === 'tool_use') {
+        const sh = toolShape(it.name, it.input);
+        shapeOf.set(it.id, sh);
+        let r = toolShapes.get(sh);
+        if (!r) toolShapes.set(sh, r = { calls: 0, tokens: 0 });
+        r.calls++;
+      } else if (it?.type === 'tool_result') {
+        const sh = shapeOf.get(it.tool_use_id);
+        if (sh) { toolShapes.get(sh).tokens += resultTokens(it.content); shapeOf.delete(it.tool_use_id); }  // 用完就丟：Victus 的 transcript 有 8 GB 級
       }
     }
 
@@ -156,8 +207,11 @@ async function main() {
     host: os.hostname(), days: DAYS, configDirs,
     scanned: { files: filesRead, lines: linesRead, parseErrors, outOfWindow },
     projects, commits,
+    toolShapes: Object.fromEntries([...toolShapes].sort((a, b) => b[1].tokens - a[1].tokens)),
     sessions: out.sort((a, b) => b.total - a.total).slice(0, 25),
   }));
 }
 
-main().catch(e => { console.error('FATAL', e); process.exit(1); });
+// 被 import（測 toolShape）時不掃。比 realpath 不比字串：Windows 的 file:///C:/ 與 symlink 都會讓字串對不上
+const isMain = (() => { try { return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(process.argv[1]); } catch { return false; } })();
+if (isMain) main().catch(e => { console.error('FATAL', e); process.exit(1); });

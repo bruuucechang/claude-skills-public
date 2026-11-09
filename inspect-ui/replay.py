@@ -21,6 +21,7 @@ states.json 格式：
   "base": "http://localhost:5250",
   "widths": [1440, 1024],              // 寬度用 headless 的 viewport，不是使用者的視窗
   "height": 900,
+  "designOptions": {"工具畫面": false},  // 選填：design-scan.js 的選項（設計系統、行長上限…），見它的開頭
   "states": [
     {
       "name": "名冊打開",
@@ -70,6 +71,7 @@ def build_script(spec, states, widths):
         "height": spec.get("height", 900),
         "widths": widths,
         "states": states,
+        "designOptions": spec.get("designOptions"),
     }
     return f"""
 const CFG = {json.dumps(cfg, ensure_ascii=False)};
@@ -130,10 +132,11 @@ for (const st of CFG.states) {{
       rec.overlap = o["重疊"].filter(keep);
       rec.invariants = o["不變量"].filter(keep);
       if (DESIGN !== "null") {{
-        await page.evaluate((errs) => {{ window.__designScanErrors = errs; }}, errors.filter((e) => e.startsWith("例外：")));
+        await page.evaluate(([errs, opt]) => {{ window.__designScanErrors = errs; if (opt) window.__DESIGN_SCAN_OPTIONS__ = opt; }}, [errors.filter((e) => e.startsWith("例外：")), CFG.designOptions]);
         const d = await page.evaluate(DESIGN);
         rec.design = ((d && (d["命中"] || d.hits)) || []).filter((h) => keep(JSON.stringify(h)));
         rec.designRules = d && (d["規則數"] ?? d.ruleCount);
+        rec.designErrors = (d && d["錯誤"]) || [];
       }}
     }} catch (e) {{
       rec.ok = false; rec.broke = String(e.message || e).slice(0, 300);
@@ -160,7 +163,8 @@ def main(argv):
         return 2
     widths = [only_width] if only_width else spec.get("widths", [1280])
     script = build_script(spec, states, widths)
-    r = subprocess.run(["dev-browser", "--headless", "--browser", "inspect-replay"],
+    # dev-browser 預設 30 秒就砍腳本（狀態 × 寬度一多就不夠），而且被砍時一行結果都沒有
+    r = subprocess.run(["dev-browser", "--headless", "--browser", "inspect-replay", "--timeout", "590"],
                        input=script, capture_output=True, text=True, timeout=600)
     recs = [json.loads(l[len(MARK):]) for l in r.stdout.splitlines() if l.startswith(MARK)]
     if not recs:
@@ -173,7 +177,7 @@ def main(argv):
         print(f"狀態腳本：{path}\n")
     for rec in recs:
         design_err = [d for d in rec["design"] if (d.get("嚴重度") or d.get("severity")) == "error"]
-        n = len(rec["overlap"]) + len(rec["invariants"]) + len(design_err) + len(rec["errors"])
+        n = len(rec["overlap"]) + len(rec["invariants"]) + len(design_err) + len(rec["errors"]) + len(rec.get("designErrors", []))
         if not rec["ok"]:
             broke += 1
         elif n:
@@ -200,6 +204,8 @@ def main(argv):
             print("    [設計 warn/info] " + "、".join(f"{k}×{v}" for k, v in ids.items()))
         for e in rec["errors"][:5]:
             print("    [console] " + e)
+        for e in rec.get("designErrors", [])[:5]:
+            print(f"    [設計規則自己壞了] {e.get('id')}：{e.get('訊息', '')[:160]}")
     if not as_json:
         print(f"\n{len(recs)} 次重播：{broke} 次進不去、{found} 次有發現")
     return 3 if broke else (1 if found else 0)

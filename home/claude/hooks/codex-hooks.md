@@ -91,7 +91,9 @@ Claude Code session 在跑，log 會長，不要看到行數變多就當成是 C
 | `commit-message-guard.mjs` | 搬 | |
 | `pr-guard.mjs`、`pushq-guard.mjs` | 搬（2026-10-21） | pr-guard 擋 `--no-verify` 與帶路徑的 git、pushq-guard 擋 `--no-verify` 與 `PUSHQ_*` 環境變數，都是繞過 pre-push 的寫法；直推程式碼由全域 pre-push `pr-prepush.mjs` 擋（Codex 子程序帶 `CODEX_THREAD_ID`，2026-10-21 實測） |
 | `kill-guard.mjs` | 搬（2026-10-21） | Codex 在 tmux 裡跟 Claude 的 lane 同住一台機器，`pkill -f` 一樣會殺到別人的程序；只看指令字串，不吃 transcript |
+| `git-wipe-guard.mjs` | 搬（2026-10-23） | Codex 跟 Claude 的 lane 共用工作區，`reset --hard`／`checkout .`／`clean -f` 一樣會清掉別人的改動；只看指令字串（`reset --hard` 另外問一次 `git status`） |
 | Stop `lang-guard.mjs` | **沒搬** | Codex 的收尾不是直接給使用者讀的：codex-drive 由 Claude 讀過再改寫成繁體回報；`codex exec` 也沒有 `CLAUDE_CODE_ENTRYPOINT=sdk-*` 可以分辨非互動，擋了會弄壞要英文／JSON 輸出的產線 |
+| Stop `zh-guard.mjs` | **沒搬** | 同 lang-guard：Codex 的收尾由 Claude 讀過再改寫成繁體回報，改寫那一則才是使用者讀的 |
 | Stop `ask-with-options.mjs` | 搬 | 本來就有；提示音 2026-10-12 拿掉（背景平行跑的 Codex 每結束一個就叮，疊成連續聲音） |
 | `session-journal`／`session-restore`／`context-tier` | **沒搬** | 解析的是 Claude 的 transcript 格式（token 用量欄位），Codex 的 rollout 格式不同，接上去會安靜地算錯 |
 | `InstructionsLoaded`、`Notification` | 沒搬 | Codex 沒有這兩個事件 |

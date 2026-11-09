@@ -1,0 +1,132 @@
+<!doctype html>
+<!--
+  tokens.css ＋ app.css 的示範頁：每一種元件與畫面狀態各放一個，改了樣板就打開這頁看。
+  亮暗兩色：網址加 ?theme=dark 或 ?theme=light（不加就跟系統）。
+  主色：網址加 ?accent=%23b4532a 之類的色碼，看換主色之後還站不站得住。
+  驗收：app-design skill 的「驗收」一節。
+-->
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>收成紀錄</title>
+  <link rel="stylesheet" href="tokens.css" />
+  <link rel="stylesheet" href="app.css" />
+  <script>
+    const q = new URLSearchParams(location.search)
+    if (q.get('theme')) document.documentElement.dataset.theme = q.get('theme')
+    if (q.get('accent')) document.documentElement.style.setProperty('--accent', q.get('accent'))
+  </script>
+</head>
+<body>
+  <main class="app">
+    <header class="page-head">
+      <div>
+        <h1>收成紀錄</h1>
+        <p class="sub">東區菜園 · 資料更新於 10/23 09:14</p>
+      </div>
+      <div class="actions">
+        <button class="btn text" type="button">匯出</button>
+        <button class="btn primary" type="button">新增一筆</button>
+      </div>
+    </header>
+
+    <section class="kpis" aria-label="本週摘要">
+      <div class="kpi">
+        <span class="label">本週收成</span>
+        <span class="value lead">128.4<span class="unit">公斤</span></span>
+        <span class="delta good">比上週 +12.6 公斤</span>
+      </div>
+      <div class="kpi">
+        <span class="label">收成次數</span>
+        <span class="value">17<span class="unit">次</span></span>
+        <span class="delta">比上週 0</span>
+      </div>
+      <div class="kpi">
+        <span class="label">損耗率</span>
+        <span class="value">6.8<span class="unit">%</span></span>
+        <span class="delta bad">比上週 +2.1 個百分點</span>
+      </div>
+    </section>
+
+    <!-- 元件展示：每一格是不同的元件，高度本來就不一樣，所以關掉「同一列底邊不齊」。
+         真的畫面不准這樣關：同一列的卡片要靠內容排到等高，或改成上下疊（app-design 目視第 2 題）。 -->
+    <div class="grid" data-design-scan-ignore="app-ragged-row">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>最近收成</h2>
+          <span class="meta">共 5 筆</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr><th>作物</th><th>日期</th><th class="num">重量（公斤）</th><th>狀態</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="id">小白菜<span class="sub">A3 畦</span></td><td class="num">10/23</td><td class="num">24.60</td><td><span class="pill positive">已入庫</span></td></tr>
+              <tr><td class="id">地瓜葉<span class="sub">B1 畦</span></td><td class="num">10/22</td><td class="num">8.15</td><td><span class="pill">待秤重</span></td></tr>
+              <tr><td class="id">茄子<span class="sub">C2 畦</span></td><td class="num">10/22</td><td class="num">31.00</td><td><span class="pill warning">部分損傷</span></td></tr>
+              <tr><td class="id">九層塔<span class="sub">A1 畦</span></td><td class="num">10/21</td><td class="num"><span class="dash">—</span></td><td><span class="pill negative">蟲害報廢</span></td></tr>
+              <tr><td class="id">絲瓜<span class="sub">D4 棚</span></td><td class="num">10/20</td><td class="num">0.00</td><td><span class="pill">未結果</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>記一筆收成</h2></div>
+        <form class="row-form" onsubmit="return false">
+          <div class="field">
+            <label for="crop">作物</label>
+            <input id="crop" class="input" placeholder="例如：小白菜" />
+          </div>
+          <div class="field">
+            <label for="kg">重量（公斤）</label>
+            <input id="kg" class="input num" inputmode="decimal" aria-invalid="true" value="-3" aria-describedby="kg-err" />
+            <span id="kg-err" class="error">重量不能是負的</span>
+          </div>
+        </form>
+        <div class="actions">
+          <button class="btn primary" type="submit">儲存</button>
+          <button class="btn" type="button" disabled aria-describedby="why">複製上一筆</button>
+          <span id="why" class="hint">今天還沒有上一筆</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>待辦</h2></div>
+        <div class="empty">
+          <span>今天沒有要採收的作物。</span>
+          <button class="btn sm" type="button">看明天的</button>
+        </div>
+      </section>
+
+      <section class="panel" aria-busy="true">
+        <div class="panel-head"><h2>天氣</h2><span class="meta"><span class="skeleton"></span></span></div>
+        <ul class="list">
+          <li><span class="grow">今天</span><span class="skeleton"></span></li>
+          <li><span class="grow">明天</span><span class="skeleton"></span></li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>灌溉排程</h2></div>
+        <div class="error-inline" role="alert">
+          <span class="msg">讀不到灌溉排程。最後一次成功是 08:40。</span>
+          <button class="btn sm text" type="button">重試</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>去年同期</h2></div>
+        <p class="notice">這是 2025 年的快照，不會更新。</p>
+        <ul class="list">
+          <li><span class="grow">小白菜</span><span class="num">212.30 公斤</span></li>
+          <li><span class="grow">茄子</span><span class="num">97.85 公斤</span></li>
+        </ul>
+        <p><a href="#">看完整的去年紀錄</a></p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

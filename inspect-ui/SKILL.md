@@ -77,6 +77,8 @@ function leaves(root, win = window) {
     if (!hasText) continue;
     const cs = win.getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+    // 收起來的 <details> 裡的字 rect 照樣有大小、但畫不出來（U10 實測）
+    if (typeof el.checkVisibility === 'function' && !el.checkVisibility()) continue;
     // 絕對／固定定位的東西本來就會疊在別人上面（浮動訊息、抽屜），不算破圖
     if (floating(el, win)) continue;
     const clip = clipRect(el, win);          // ← 捲出容器外的部分不算數
@@ -287,6 +289,22 @@ python3 ~/.claude/skills/inspect-ui/replay.py ~/Projects/<專案> --state 名冊
 `design-scan.js` 是 impeccable 的確定性偵測規則（不需要 LLM）改寫成的頁面內掃描，
 規則清單、分類與怎麼單獨跑見 **[design-rules.md](design-rules.md)**。
 第六節的重播器會自動帶上它；只有 `error` 級會讓離開碼變 1，其他級別只列數量。
+
+2026-10-23 加了**工具畫面類 15 條**（taste-skill 的 app 量測：數字對齊、等寬數字、卡片底邊、面板空白、陰影、h1 大小、假資料…）
+與**無障礙類 3 條**（圖示按鈕沒名字、沒有 reduced-motion、看不到焦點），之後又加 `text-clipped`（輸入框的值、表格格子被切掉幾 px 也報，U13）；行銷頁、遊戲在 `states.json` 寫
+`"designOptions": {"工具畫面": false}` 關掉前者。原始碼層的（寫死色碼、`transition: all`、emoji）用
+`node ~/.claude/skills/inspect-ui/source-lint.mjs <前端資料夾>` 掃，不用開瀏覽器。兩支的規則與 fixture 驗收都在 design-rules.md。
+
+## 八、程式掃完之後用眼睛看：目視七題（2026-10-23）
+
+程式掃得到重疊、溢出、對比，掃不到「這個畫面有沒有回答它的問題」。截圖（桌面寬＋390px、
+**亮暗兩色**各一張）打開來，逐題寫下答案：題目與背後的設計規則在 **`app-design` skill 的「十、驗收」**，
+`ui-verifier` 用的是同一份，不要在這裡另抄一份。
+
+修最嚴重的三個、再截一次、再看一次，最多三輪。截圖上看得到的問題就是真的問題。
+
+畫面本身該長什麼樣（token、數字、KPI、表單、狀態、手機版）也在 `app-design`；
+共用樣式在 `~/.claude/skills/newproj/templates/`（`tokens.css`、`app.css`、示範頁 `demo.html`）。
 
 ## 收尾
 

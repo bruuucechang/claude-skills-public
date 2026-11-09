@@ -1,0 +1,93 @@
+{
+  "_說明": "check.py 讀這份。must＝一定要抓到的規則；none＝這個正規式比對到的規則一條都不准出現（正例 0 誤報）；count＝那條規則要剛好報幾筆。路徑相對於這個資料夾。",
+  "cases": [
+    {
+      "file": "app-bad.html",
+      "width": 1280,
+      "must": [
+        "app-unused-canvas",
+        "app-heavy-shadow",
+        "app-heavy-borders",
+        "app-radius-mix",
+        "app-numeric-align",
+        "app-tabular",
+        "app-rainbow-chart",
+        "app-placeholder-data",
+        "app-ragged-row",
+        "app-panel-void",
+        "app-title-size",
+        "app-kpi-size",
+        "app-size-count",
+        "a11y-icon-button-name",
+        "a11y-reduced-motion",
+        "a11y-focus-ring"
+      ]
+    },
+    {
+      "file": "app-bad.html",
+      "width": 390,
+      "must": [
+        "app-sidebar-phone",
+        "app-title-size"
+      ]
+    },
+    {
+      "file": "app-no-title.html",
+      "width": 1280,
+      "must": [
+        "app-no-title"
+      ]
+    },
+    {
+      "file": "../../newproj/templates/demo.html",
+      "width": 1280,
+      "none": "^(app|a11y)-|^text-clipped$"
+    },
+    {
+      "file": "../../newproj/templates/demo.html",
+      "width": 390,
+      "none": "^(app|a11y)-|^text-clipped$"
+    },
+    {
+      "file": "../../newproj/templates/demo.html?theme=dark",
+      "width": 1280,
+      "none": "^(app|a11y)-|^text-clipped$"
+    },
+    {
+      "file": "a11y-good.html",
+      "width": 1280,
+      "none": "^(a11y-|app-placeholder-data|app-heavy-shadow)"
+    },
+    {
+      "file": "a11y-still.html",
+      "width": 1280,
+      "none": "^a11y-"
+    },
+    {
+      "file": "app-heading-role.html",
+      "width": 1280,
+      "none": "^app-(no-title|unused-canvas)$"
+    },
+    {
+      "file": "clip-bad.html",
+      "width": 1280,
+      "must": [
+        "text-clipped",
+        "text-overflow"
+      ],
+      "count": {
+        "text-clipped": 8
+      }
+    },
+    {
+      "file": "clip-good.html",
+      "width": 1280,
+      "none": "^text-clipped$"
+    },
+    {
+      "file": "clip-good.html",
+      "width": 390,
+      "none": "^text-clipped$"
+    }
+  ]
+}

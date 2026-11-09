@@ -105,6 +105,9 @@ else
   REG_NOTE="埠位寫在 \`.env\`（建專案時挑好的）"
 fi
 
+# 前端共用的設計規格（tokens.css＋app.css）放在 templates/，原樣複製進新專案。
+TEMPLATES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/templates"
+
 # 所有樣板都用 quoted heredoc 寫（裡面的 $ 原樣保留），再統一過這一道替換。
 subst() {
   sed -e "s|__NAME__|$NAME|g" \
@@ -817,6 +820,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
 }
 
+// 畫面上的錯誤訊息只講一句話：後端回的整頁 HTML／堆疊不要直接印到畫面上。
+export function describeError(e: unknown): string {
+  if (e instanceof ApiError) return `HTTP ${e.status}`
+  return e instanceof Error ? e.message : String(e)
+}
+
 EOF
 
   if [ "$WITH_DB" = 1 ]; then
@@ -844,9 +853,15 @@ EOF
 export { ApiError }
 EOF
 
+  # 設計規格：元件不寫死顏色、字級、間距，一律用 tokens.css 的變數（見 app-design skill）。
+  # 專案要自己的長相只改 tokens.css 開頭的主色。
+  cp "$TEMPLATES/tokens.css" "$TEMPLATES/app.css" "$DIR/frontend/src/"
+
   subst > "$DIR/frontend/src/main.tsx" <<'EOF'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import './tokens.css'
+import './app.css'
 import App from './App'
 
 createRoot(document.getElementById('root')!).render(
@@ -864,7 +879,7 @@ EOF
 // component 不直接 fetch，一律走 api/client.ts。
 
 import { useEffect, useState } from 'react'
-import { api } from './api/client'
+import { api, describeError } from './api/client'
 
 export default function App() {
   const [health, setHealth] = useState('檢查中…')
@@ -873,13 +888,17 @@ export default function App() {
     api
       .health()
       .then((h) => setHealth(h.ok ? '後端通了' : '後端回報異常'))
-      .catch((e) => setHealth(`後端打不到：${e}`))
+      .catch((e) => setHealth(`後端打不到（${describeError(e)}）`))
   }, [])
 
   return (
-    <main style={{ fontFamily: 'system-ui', maxWidth: 640, margin: '3rem auto', padding: '0 1rem' }}>
-      <h1>__NAME__</h1>
-      <p style={{ color: '#666' }}>{health}</p>
+    <main className="app">
+      <header className="page-head">
+        <div>
+          <h1>__NAME__</h1>
+          <p className="sub">{health}</p>
+        </div>
+      </header>
     </main>
   )
 }
@@ -892,7 +911,7 @@ EOF
 // 開始寫真正的功能時可以整個刪掉。留著的價值是「照這條線抄就對了」。
 
 import { useEffect, useState } from 'react'
-import { api } from './api/client'
+import { api, describeError } from './api/client'
 import type { Item } from './types'
 
 export default function App() {
@@ -904,14 +923,17 @@ export default function App() {
   const reload = () =>
     api
       .listItems()
-      .then(setItems)
-      .catch((e) => setError(String(e)))
+      .then((rows) => {
+        setItems(rows)
+        setError(null)
+      })
+      .catch((e) => setError(`讀不到清單（${describeError(e)}）`))
 
   useEffect(() => {
     api
       .health()
       .then((h) => setHealth(h.ok ? '後端與資料庫都通' : `資料庫異常：${h.db}`))
-      .catch((e) => setHealth(`後端打不到：${e}`))
+      .catch((e) => setHealth(`後端打不到（${describeError(e)}）`))
     reload()
   }, [])
 
@@ -923,35 +945,57 @@ export default function App() {
       setName('')
       reload()
     } catch (e) {
-      setError(String(e))
+      setError(`新增失敗（${describeError(e)}）`)
     }
   }
 
   return (
-    <main style={{ fontFamily: 'system-ui', maxWidth: 640, margin: '3rem auto', padding: '0 1rem' }}>
-      <h1>__NAME__</h1>
-      <p style={{ color: '#666' }}>{health}</p>
+    <main className="app">
+      <header className="page-head">
+        <div>
+          <h1>__NAME__</h1>
+          <p className="sub">{health}</p>
+        </div>
+      </header>
 
-      <form onSubmit={add} style={{ display: 'flex', gap: 8, margin: '1.5rem 0' }}>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="新增一筆"
-          style={{ flex: 1, padding: 8 }}
-        />
-        <button type="submit">新增</button>
-      </form>
+      <section className="panel">
+        <form onSubmit={add} className="row-form">
+          <div className="field">
+            <label htmlFor="new-item">名稱</label>
+            <input
+              id="new-item"
+              className="input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="例如：第一筆資料"
+            />
+          </div>
+          <button type="submit" className="btn primary">新增</button>
+        </form>
 
-      {error && <p style={{ color: 'crimson' }}>{error}</p>}
+        {error && (
+          <div className="error-inline" role="alert">
+            <span className="msg">{error}</span>
+            <button type="button" className="btn sm text" onClick={reload}>重試</button>
+          </div>
+        )}
 
-      <ul style={{ listStyle: 'none', padding: 0 }}>
-        {items.map((it) => (
-          <li key={it.id} style={{ display: 'flex', gap: 8, padding: '6px 0', borderBottom: '1px solid #eee' }}>
-            <span style={{ flex: 1 }}>{it.name}</span>
-            <button onClick={() => api.deleteItem(it.id).then(reload)}>刪除</button>
-          </li>
-        ))}
-      </ul>
+        {items.length === 0 ? (
+          // 讀失敗時不要同時說「沒有資料」——那是兩件不同的事
+          !error && <div className="empty">還沒有資料。從上面新增第一筆。</div>
+        ) : (
+          <ul className="list">
+            {items.map((it) => (
+              <li key={it.id}>
+                <span className="grow">{it.name}</span>
+                <button type="button" className="btn sm text danger" onClick={() => api.deleteItem(it.id).then(reload)}>
+                  刪除
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </main>
   )
 }
@@ -1283,6 +1327,9 @@ paths:
   那會讓「後端改了什麼」變成要全域搜尋才答得出來的問題。
 - **`types.ts` 對應後端的 `schemas/`。** 後端改了 schema 就同步改這裡，
   兩邊對不上的症狀是執行期才炸，而且畫面上看起來只是「少一塊」。
+- **顏色、字級、間距、圓角一律用 `src/tokens.css` 的變數**，元件裡不寫色碼、不寫 `style={{…}}`；
+  版面、面板、表格、按鈕、空／載入／錯誤狀態先用 `src/app.css` 的 class。
+  專案要自己的長相只改 `tokens.css` 開頭的主色。設計方向見全域的 `app-design` skill。
 - **改完要真的把畫面渲染出來看**，單元測試綠燈跟畫面沒壞是兩件事。
   做法見全域的 `~/.claude/rules/browser.md`：預設用 `dev-browser --headless`，
   不要開使用者的 Chrome 分頁。

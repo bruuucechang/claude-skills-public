@@ -1,6 +1,6 @@
 # design-scan 規則表
 
-`design-scan.js` 是一支可以直接丟進 `page.evaluate` 的掃描檔，在頁面裡跑 61 條
+`design-scan.js` 是一支可以直接丟進 `page.evaluate` 的掃描檔，在頁面裡跑 80 條（impeccable 61 條＋工具畫面 15 條＋無障礙 3 條＋`text-clipped` 1 條，後三類見「工具畫面類與無障礙類」與「欄位裝不下字」兩節）
 **確定性**（不需要 LLM）的前端設計偵測規則，回傳結構化結果。跟第一節的
 「通用重疊偵測器」是同一種用法：渲染出來、用程式量，不靠肉眼。
 
@@ -80,6 +80,95 @@
 | 60 | `theater-slop-phrase` | slop | info | 把東西貶成「X theater」的生成文案口頭禪 | 品味類 |
 | 61 | `image-hover-transform` | slop | info | 滑過圖片就放大或旋轉 | 品味類 |
 
+## 工具畫面類與無障礙類（2026-10-23 加，共 18 條）
+
+後台、儀表板、清單、設定頁的慣例跟行銷頁不一樣，impeccable 那 61 條管不到。
+`app-*` 改寫自 [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill)（MIT，commit `6010f91a`）的
+`scripts/lib/probe.mjs` `app()` 與 `scripts/lib/rules.mjs` `judgeApp()`，門檻照原作（原作 FAIL → `error`、WARN → `warn`）；
+`a11y-*` 是新寫的，清單參考 ui-ux-pro-max-skill 的 `quick-reference.md`。畫面該長什麼樣在 `app-design` skill。
+
+| id | 嚴重度 | 什麼時候報 |
+|---|---|---|
+| `app-sidebar-phone` | error | 寬度 < 600px 時側欄（貼左、高 ≥ 70% 視窗、≥ 3 個連結）還佔 > 30% 寬 |
+| `app-unused-canvas` | warn | 寬 ≥ 1100px，內容離右緣 > max(120px, 10%) 且比左邊多 80px 以上 |
+| `app-heavy-shadow` | error | 面板陰影：亮底 alpha ≥ 0.12 且模糊 ≥ 12px、或位移 ≥ 8px、或 alpha ≥ 0.25；暗底 alpha ≥ 0.45。dialog、選單、fixed 不算 |
+| `app-heavy-borders` | warn | 三個以上面板的框線對地面 ≥ 1.45:1（暗底 1.9:1） |
+| `app-radius-mix` | warn | 面板（各出現 ≥ 2 次的）圓角超過 3 種 |
+| `app-numeric-align` | warn | ≥ 6 個數字格、一半以上靠左 |
+| `app-tabular` | warn | ≥ 6 個數字、不到一半用 `tabular-nums` |
+| `app-rainbow-chart` | warn／error | SVG 圖表的色相 > 4 種（> 6 種升 error） |
+| `app-placeholder-data` | error | 畫面字裡有 John Doe、Acme、Lorem ipsum、王小明、張三、某某公司、測試用戶、0912-345-678… |
+| `app-ragged-row` | warn | 同一列兩張 ≥ 200px 寬的卡片底邊差 > max(24px, 12%)（疊成一欄的算一塊；手機不量） |
+| `app-panel-void` | warn | 寬 ≥ 1100px，卡片內容之間或到底部有 > 40px 的空白帶（下一段是新標題時 > 64px） |
+| `app-title-size` | warn | h1 > 34px（手機 > 28px） |
+| `app-kpi-size` | warn | 有數字的字級 ≥ 48px |
+| `app-size-count` | warn | 畫面上超過 10 種字級 |
+| `app-no-title` | error | 沒有看得見的 h1 |
+| `a11y-icon-button-name` | error | 按鈕／連結的名字（aria-labelledby、aria-label、title、alt、svg 的 title、不在 aria-hidden 裡的字，含 sr-only）裡沒有任何文字或數字——只有 ×、☰、⋯、箭頭、emoji 也算沒有 |
+| `a11y-reduced-motion` | error | 有會動的轉場（不只顏色、底色、框色、陰影、透明度）或動畫，整頁沒有 `prefers-reduced-motion` |
+| `a11y-focus-ring` | error | 真的 `focus()` 一次：符合 `:focus-visible` 時外框是 none／0，陰影、框色、底色、字色、底線也都沒變 |
+
+**跟原作不一樣的地方**：假資料的英文區分大小寫（「User name」是正常標籤）、中文名字前後緊接漢字不算（李四光）；`role="heading" aria-level="1"` 算 h1；零位移零模糊的外擴環（選取環）不算陰影；數字的正規式認得中文單位（元、筆、件、公斤、萬、億、小時…）與 NT$；
+KPI 數字看「自己的字」，`<span>128.4<span class="unit">公斤</span></span>` 也算一個數字（原作只看葉節點）；
+假資料認得中文；浮層（dialog、選單、popover）與 fixed 元素不算面板；2px 以內的貼邊陰影不算重；手機上的側欄寬度上限放寬到 80%（原作 45%，寬抽屜量不到），但超過 45% 的要是 nav／aside 才算（scaledraw 的畫布會被當成側欄）。
+沒搬：`colourShare`（要截圖）、`below-fold`、`icon-chips`、`icon-tiles`、`no-data-hue`，以及跟既有 `tiny-text` 重複的那條。
+
+**`a11y-focus-ring` 會真的移動焦點**，所以排在最後、量完把焦點還回去；會開選單的（combobox、`aria-haspopup`、`input[list]`）不碰。
+點過滑鼠之後瀏覽器不顯示 `:focus-visible`，一個都量不到時這條進「略過」並寫原因（不是過關）。
+頁面的 focus／blur 處理器會改狀態（失焦驗證、自動展開）就給選項 `不移動焦點: true` 關掉它。
+
+不是工具畫面（行銷頁、遊戲）就給選項 `工具畫面: false`，`app-*` 會進「略過」。
+元件展示頁那種「每格本來就不同高」的地方用 `data-design-scan-ignore="app-ragged-row"` 關，真的畫面不准關。
+
+**驗收**：`python3 ~/.claude/skills/inspect-ui/fixtures/check.py`（期望值在 `fixtures/expect.json`：
+`app-bad.html` 每條都要抓到、`newproj/templates/demo.html` 亮暗×1280／390 與 `a11y-good.html`、`a11y-still.html` 0 誤報），
+`tests/run.sh` 會跑它。
+
+### 欄位裝不下字：`text-clipped`（2026-10-23 加，U13）
+
+U4 使用者一眼看到 loan-ledger 手機版的銀行帳號最後一個字被切掉（390 寬 49 格），design-scan 卻是 0 個發現：
+`text-overflow` 要差 16px 才報（切掉一個字只差 3〜4px），而且只看文字節點，輸入框的值它看不到。
+
+| 報什麼 | 條件 |
+|---|---|
+| 輸入框的值 | text／search／email／tel／url／number／password，`scrollWidth − clientWidth > 1`（有焦點的也算）。日期時間類量不到：Chrome 的 date／time 欄位 `scrollWidth` 永遠等於 `clientWidth` |
+| 輸入框的提示字 | 沒有值時，用 `::placeholder` 的字型在 canvas 量字寬，比框內寬（扣左右內距）多 1px 以上（提示字不算進 `scrollWidth`） |
+| 表格格子 | td／th 整格的字超出格子 2〜15px（16px 以上是 `text-overflow` 的事）；在可捲的祖先裡不算 |
+| 裁切框裡的字 | `overflow: hidden／clip` 的元素自己的字、加上一路都是 inline 的子元素裡的字（「帳號：`<a>`0123…`</a>`」），文字節點的 `Range` 超出框的 padding box 2px 以上（`direction: rtl` 量左緣）；不用 `scrollWidth`，所以裝飾的偽元素、超出去的圖不算；可捲的祖先也照報（裁掉的捲不到） |
+
+不報：`text-overflow: ellipsis`（刻意的省略號）、`display: inline`、螢幕閱讀器專用字、核取方塊與滑桿這類不是文字的輸入框。
+**跟 `text-overflow` 分工**：裁切框（`overflow: hidden／clip`、沒有省略號、不是 inline、量得到寬度）從 `text-overflow` 拿掉、只由這條報，同一個元素不會兩條都報；
+inline 元素寫 `overflow: hidden` 沒有作用，照舊由 `text-overflow` 報；
+省略號那種 `text-overflow` 照舊（原作行為，沒改）。
+
+驗收：fixture `clip-bad.html` 剛好 8 筆（另要抓到 inline 的 `text-overflow`）、`clip-good.html` 1280／390 與 `demo.html` 0 筆；
+loan-ledger 複本手機段改回三欄（刪除鈕另佔一欄）在 390 掃出 49 筆、360 掃出 50 筆，改回現狀三個寬度都 0 筆（重跑見 baseline.md 的 U13）。
+
+### 原始碼靜態掃描：`source-lint.mjs`
+
+渲染前就抓得到、或渲染了也看不到的（寫死的色碼、`transition: all`）用這支掃原始碼，不用開瀏覽器：
+
+```bash
+node ~/.claude/skills/inspect-ui/source-lint.mjs ~/Projects/<專案>/frontend          # 人看的
+node ~/.claude/skills/inspect-ui/source-lint.mjs ~/Projects/<專案>/frontend --json   # 機器讀的
+```
+
+| id | 嚴重度 | 抓什麼 |
+|---|---|---|
+| `emoji` | error | emoji 當介面圖示（©®™ 不算） |
+| `lorem` | error | Lorem ipsum |
+| `placeholder-data` | error | 假資料（同上，中英文） |
+| `transition-all` | warn | `transition: all`／`transition-all` |
+| `100vh` | warn | `100vh`／`h-screen`（手機會跳，用 `100svh`／`100dvh`） |
+| `framework-colour` | warn | Tailwind 預設的藍綠紅黃色碼 |
+| `hex-outside-tokens` | warn | `:root`／`[data-theme]`／`.dark` 區塊、`tailwind.config.*`、`tokens.*`／`theme.*` 檔以外寫死的色碼（含 JSX 的 style 與 tailwind 任意值 `bg-[#…]`） |
+| `no-focus-visible` | warn | 整個專案沒有任何 `:focus-visible`（或 tailwind 的 `focus-visible:`） |
+| `no-reduced-motion` | warn | 有轉場或動畫，整個專案沒有 `prefers-reduced-motion`（或 `motion-reduce:`） |
+
+註解裡的不算（含 scss 的 `//` 與跨行 `<!-- -->`）；`href="#…"`、`url(#…)`、`#add-item` 這類錨點與 id 不算色碼；轉場只看 CSS 宣告、class 裡的 tailwind 字與 style 物件；那一行寫 `source-lint-ignore` 就略過。`node_modules`、`dist`、測試與 fixture 資料夾、`*.test.*`、`.min.` 不掃
+（但直接指名的資料夾會掃）。離開碼：0 沒有 error、1 有 error、**2 一個檔都沒掃到（結果不可信）**。
+出處：前五條改寫自 taste-skill 的 `scripts/lint.mjs` 第 37-66 行，色碼那條的構想參考 ui-ux-pro-max-skill 的 `validate-tokens.cjs`。
+
 ## 怎麼跑
 
 dev-browser 的腳本跑在沙箱裡，只能讀 `~/.dev-browser/tmp/`，所以先把掃描檔複製過去：
@@ -113,9 +202,9 @@ EOF2
 
 ```js
 {
-  規則數: 61,
+  規則數: 80,
   命中: [{ id, 嚴重度: 'error'|'warn'|'info', 說明, 選擇器或節點描述, 細節 }],  // 依嚴重度排序
-  略過: [{ id, 原因 }],   // 沒給選項而沒跑的規則（script-error、design-system-*）
+  略過: [{ id, 原因 }],   // 沒給選項而沒跑的規則（script-error、design-system-*、工具畫面: false 時的 app-*）
   錯誤: [{ id, 訊息 }],   // 規則本身拋例外（正常應該是空的）
   耗時毫秒
 }
@@ -128,6 +217,8 @@ EOF2
 | `行長上限` | `line-length` 的字數上限，預設 80 |
 | `設計系統` | `{ 字型, 顏色, 圓角, 字級, 允許膠囊圓角, 宣告的選擇器 }`；沒給就略過 design-system-* 四條 |
 | `錯誤收集器` | `script-error` 讀的全域陣列名稱，預設 `__designScanErrors` |
+| `工具畫面` | `false` 時不跑 `app-*` 15 條（行銷頁、遊戲用）；預設會跑 |
+| `不移動焦點` | `true` 時不跑 `a11y-focus-ring`（它會真的 `focus()`／`blur()`） |
 | `只列規則` | `true` 時只回傳規則清單，不掃描（本表就是這樣產生的） |
 
 局部停用：在元素上加 `data-impeccable-ignore="side-tab low-contrast"`（或 `data-design-scan-ignore`），
@@ -167,6 +258,7 @@ EOF2
    - `body-text-viewport-edge` 祖先是 fixed／absolute 也排除；`heading-rhythm` 跳過黏在 fixed／sticky 層裡的標題。
    - `clipped-overflow-container` 不算沒畫出來的定位子元素。
    - `cramped-padding`：文字已經衝出框外（內距為負）時交給 `text-overflow`，不重複報。
+   - `text-overflow`：`overflow: hidden／clip` 又沒有省略號的元素交給 `text-clipped`（2026-10-23），不重複報。
    - `layout-transition` 要真的有轉場時間才算。
 7. **多抓的東西**：`broken-image` 除了原作的「沒 src／空 src／`#`」，也報 DOM 才看得到的「實際載入失敗」
    （`complete && naturalWidth === 0`，`loading="lazy"` 除外）。

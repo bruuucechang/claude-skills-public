@@ -1,0 +1,12 @@
+<!doctype html>
+<!-- 正例：只有顏色與底色的轉場不算「會動」，沒有 reduced-motion 也不該報 -->
+<html lang="zh-Hant">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>只變色</title>
+<style>
+  body { margin: 0; padding: 24px; font-family: -apple-system, "PingFang TC", sans-serif; background: #fff; color: #222; }
+  a, .btn { transition: color .15s, background-color .15s, border-color .15s, opacity .15s; }
+  .btn { padding: 6px 10px; border: 1px solid #888; background: #fff; }
+  .btn:hover { background: #eee; }
+</style></head>
+<body><main><h1>只變色</h1><p><button class="btn" type="button">儲存</button> <a href="#">說明</a></p></main></body>
+</html>

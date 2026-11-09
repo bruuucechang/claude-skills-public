@@ -20,6 +20,7 @@
 | 觸發 | **語意觸發** skill：對話中提到「叫 Codex 做／交給 Codex」 |
 | 對話生命週期 | **同一專案接續同一個 Codex 對話**；context 用量 **≥ 50%** 時請 Codex 寫交接摘要 → 關掉 → 用摘要開新對話（省 token） |
 | 不合格處理 | 最多**退回 2 次**；第 3 次仍不合格 → 停下用選項問使用者 |
+| 模型分級（2026-10-27） | **品質為主**；三級：雜事＝`gpt-6.1-terra` medium、一般＝`gpt-6-astra` medium、難題＝`gpt-6-astra` xhigh；由 Claude 寫工作單時判級；**退回第 1 次升一級**（由 Claude 照 SKILL.md 流程跑 `cx up`，resume 同一個對話換模型；不是 cx 自動偵測）；產圖的 `codex exec` 路線不適用 |
 
 ## 流程
 

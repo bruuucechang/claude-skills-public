@@ -85,7 +85,7 @@ done
 EXTERNAL=(
   "agents-best-practices|DenisSergeevitch/agents-best-practices|dace8b70c563ef36e36c8d2196b1630184ec7912|."
   "archify|tt-a1i/archify|06dd052602dd|archify"
-  "security-audit|cloudflare/security-audit-skill|8bac42001ddd|skills/security-audit"
+  "security-audit|cloudflare/security-audit-skill|c1c8a8c1471069fb0e188eeaff69b8e8db6564a8|skills/security-audit"
 )
 
 # sprite-gen 有硬性外部依賴，**缺了就不要裝**——一個裝了卻跑不動的 skill 比沒裝

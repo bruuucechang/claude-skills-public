@@ -14,6 +14,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 // Opus 標準費率（USD / MTok）。訂閱制沒有實際帳單，這裡只當「相對成本權重」用。
 const P = { in: 15, out: 75, cw: 18.75, cr: 1.5 };
@@ -22,13 +25,22 @@ const cost = p => (p.in * P.in + p.out * P.out + p.cacheCreate * P.cw + p.cacheR
 const DIR = process.argv[2] || '.';
 const files = { Air: 'air.json', 'M5 Pro': 'pro.json', VICTUS: 'victus.json', desk: 'desk.json' };
 const data = {};
+const missing = [];
 for (const [name, f] of Object.entries(files)) {
   const p = path.join(DIR, f);
   try { data[name] = JSON.parse(fs.readFileSync(p, 'utf8')); }
   // 讀不到要出聲。少一台就少一台的帳，安靜跳過會讓總數看起來很合理但是錯的。
-  catch (e) { console.error(`!! ${name}（${p}）讀不到，這一台不列入：${e.message}`); }
+  catch (e) { missing.push(`!! ${name}（${p}）讀不到，這一台不列入：${e.message}`); }
 }
-if (!Object.keys(data).length) { console.error('一台都沒讀到，先跑 spend.sh'); process.exit(1); }
+// 一台都沒有又沒給目錄＝下面會退回只掃本機，那四行是雜訊；其餘情況少一台就要出聲
+if (Object.keys(data).length || process.argv[2]) for (const m of missing) console.error(m);
+if (!Object.keys(data).length) {
+  // 沒給目錄、也沒有四台的 JSON：退回只掃這一台（不連遠端），並明講只有一台
+  if (process.argv[2]) { console.error('一台都沒讀到，先跑 spend.sh'); process.exit(1); }
+  console.error(`!! 目前目錄沒有四台的 JSON，只掃這一台（${os.hostname()}）；四台合計跑 spend.sh`);
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  data['本機'] = JSON.parse(execFileSync(process.execPath, [path.join(here, 'spend.mjs'), '30'], { encoding: 'utf8', maxBuffer: 1 << 28 }));
+}
 
 const merged = new Map();  // proj -> agg
 const perHost = {};
@@ -61,7 +73,7 @@ const M = n => (n / 1e6).toFixed(0) + 'M';
 const pad = (s, n) => String(s).padEnd(n);
 const rpad = (s, n) => String(s).padStart(n);
 
-console.log('# 四台合計（近 30 天）\n');
+console.log(`# ${Object.keys(data).join('＋')} 合計（近 30 天）\n`);
 console.log(`總 token（含 cache read）：${(TOT / 1e9).toFixed(1)}B`);
 console.log(`成本權重合計：$${COST.toFixed(0)}（Opus 標準費率換算，訂閱制無實際帳單）\n`);
 
@@ -101,3 +113,28 @@ for (const s of sess.slice(0, 15)) {
 console.log('\n## 未提交的工作（跑了 token 但還沒落地）');
 for (const [n, c] of Object.entries(commits).filter(([, c]) => c.uncommitted > 0).sort((a, b) => b[1].uncommitted - a[1].uncommitted))
   console.log(pad(n, 30), rpad(c.uncommitted + ' 個檔', 12), c.path);
+
+// ---- 依工具分帳（spend.mjs 的 toolShapes）----
+// 門檻照 caveman 的 detect_tool_portfolio：每種 ≥ 20k token、≥ 3 次，最多 8 列。
+// 這是「工具結果塞進 context 多少」的本機估算，不是帳單；也不准外推成月或年。
+console.log('\n## 依工具分帳：工具結果塞進 context 最多的 8 種呼叫形狀（本機估算，不是計費）');
+const shapes = new Map();
+const noShapes = [];
+for (const [host, d] of Object.entries(data)) {
+  if (!d.toolShapes) { noShapes.push(host); continue; }
+  for (const [k, v] of Object.entries(d.toolShapes)) {
+    const r = shapes.get(k) || { calls: 0, tokens: 0 };
+    r.calls += v.calls; r.tokens += v.tokens; shapes.set(k, r);
+  }
+}
+if (noShapes.length) console.log(`!! ${noShapes.join('、')} 的 JSON 沒有 toolShapes（舊版 spend.mjs），不列入`);
+const SHAPE_TOT = [...shapes.values()].reduce((a, v) => a + v.tokens, 0);
+const top = [...shapes].filter(([, v]) => v.tokens >= 20000 && v.calls >= 3).sort((a, b) => b[1].tokens - a[1].tokens).slice(0, 8);
+if (!top.length) console.log('（沒有任何一種過門檻——如果這台明明有在用，八成是 transcript 格式變了）');
+else {
+  console.log(pad('呼叫形狀', 26), rpad('估 token', 10), rpad('佔工具結果', 11), rpad('次數', 8), rpad('每次', 8));
+  for (const [k, v] of top)
+    console.log(pad(k, 26), rpad((v.tokens / 1e3).toFixed(0) + 'k', 10), rpad(((v.tokens / SHAPE_TOT) * 100).toFixed(1) + '%', 11),
+      rpad(v.calls, 8), rpad((v.tokens / v.calls / 1e3).toFixed(1) + 'k', 8));
+  console.log(`估法：文字 4 字元≈1 token、圖片每張≈1,600 token；工具結果合計約 ${(SHAPE_TOT / 1e6).toFixed(1)}M token（本機估算）`);
+}

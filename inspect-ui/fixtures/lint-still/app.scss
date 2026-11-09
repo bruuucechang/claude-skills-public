@@ -1,0 +1,3 @@
+// color: #ffffff 這行是 scss 註解，不算色碼
+.link:focus-visible { outline: 2px solid var(--accent); }
+a[href="#feed"], #add-item, .x { fill: url(#bad); }

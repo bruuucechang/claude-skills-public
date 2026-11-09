@@ -18,6 +18,76 @@ say() { printf '%s\n' "$*"; }
 bad() { issues=$((issues+1)); printf '  ✗ %s\n' "$*"; }
 ok()  { printf '  ✓ %s\n' "$*"; }
 
+# ── @ 匯入檢查（第 6 節；也能單獨跑：rules-audit.sh --imports 檔案...）─────
+# Claude Code 讀到 `@路徑` 會把那個檔整份匯入；指到不存在的檔是**安靜的**——
+# 不報錯、只是那份規則沒載入。判準抄自 caveman 的 detect_memory_health.go：
+# 跳過 code span 與程式碼區塊；只把 ./ ../ ~/ / 開頭或帶副檔名的當路徑；
+# @ 前面要是行首或空白（排除 email），排除 //host。順著匯入往下追，最多 5 層。
+check_imports() {
+  python3 - "$@" <<'PYIMP'
+import os, re, sys
+EXT = re.compile(r'\.(md|mdx|txt|json|jsonc|ya?ml|toml|sh|py|mjs|js|ts)$')
+TOK = re.compile(r'(?:^|(?<=\s))@([^\s`，。；：、（）「」]+)')
+seen, bad, n = {}, 0, 0   # realpath -> 走到過的最淺深度
+def refs(path):
+    fence = False
+    for no, line in enumerate(open(path, encoding='utf-8', errors='replace'), 1):
+        if line.lstrip().startswith(('```', '~~~')):
+            fence = not fence; continue
+        if fence: continue
+        line = re.sub(r'`[^`]*`', '', line)
+        for m in TOK.finditer(line):
+            t = m.group(1).rstrip('.,;:!?)]}」）』，。；：')
+            if not t or t.startswith('//') or '@' in t: continue
+            if not (t.startswith(('./', '../', '~/', '/')) or EXT.search(t)): continue
+            yield no, t
+short = lambda p: p.replace(os.path.expanduser('~'), '~')
+# 先 BFS 求每個檔的最淺深度、再統一判斷：邊走邊報的話「超過 5 層」會看走訪順序
+# （同一個檔先從深的路線走到、其實還有淺的路線，Claude Code 照樣載得到）
+from collections import deque
+q, edges = deque(), {}
+def push(path, depth):
+    real = os.path.realpath(path)
+    if real in seen: return
+    seen[real] = depth
+    q.append((path, real, depth))
+for f in sys.argv[1:]:
+    if os.path.isfile(f): push(f, 0)
+    elif os.environ.get('IMPORTS_STRICT'):   # --imports 明講的檔不見要出聲；整體健檢掃到的清單本來就是有才列
+        bad += 1
+        print(f'  ✗ {short(f)} {"是資料夾不是檔" if os.path.isdir(f) else "不存在"}')
+while q:
+    path, real, depth = q.popleft()
+    edges[real] = []
+    for no, t in refs(path):
+        n += 1
+        target = os.path.normpath(os.path.expanduser(t) if t.startswith('~/') else os.path.join(os.path.dirname(path), t))
+        edges[real].append((path, no, t, target))
+        if os.path.isfile(target): push(target, depth + 1)
+for real, es in edges.items():
+    for path, no, t, target in es:
+        why = None
+        if os.path.isdir(target): why = '指向資料夾不是檔'
+        elif not os.path.isfile(target): why = '指向不存在的檔'
+        elif seen[real] + 1 > 5: why = '超過 5 層，Claude Code 不會載入'
+        if why:
+            bad += 1
+            print(f'  ✗ {short(path)}:{no}　@{t} {why}（這份規則安靜地沒載入）')
+print(f'IMPORTS {len(seen)} {n} {bad}')
+PYIMP
+}
+
+if [ "${1-}" = "--imports" ]; then
+  shift
+  out=$(IMPORTS_STRICT=1 check_imports "$@")
+  printf '%s\n' "$out" | grep -v '^IMPORTS '
+  read -r _ files refs nbad <<<"$(printf '%s\n' "$out" | grep '^IMPORTS ')"
+  [ -z "${nbad-}" ] && { echo "  ✗ 檢查本身沒跑完（python 崩潰？），結果不可信"; exit 2; }
+  [ "${files:-0}" -eq 0 ] && { echo "  ✗ 一個檔都沒讀到——路徑八成壞了"; exit 2; }
+  [ "$nbad" -eq 0 ] && echo "  ✓ ${files} 個檔、${refs} 個 @ 匯入都找得到"
+  [ "$nbad" -eq 0 ]; exit
+fi
+
 say "# 規則健檢　$(date '+%Y-%m-%d %H:%M')"
 say ""
 
@@ -168,6 +238,27 @@ for p in "$HOME/.claude/CLAUDE.md" "$HOME/.claude/AGENTS.md" "$HOME/.claude/rule
   [ -L "$p" ] && ok "$(basename "$p") → $(readlink "$p" | sed "s|$HOME|~|")" \
               || bad "$(echo "$p" | sed "s|$HOME|~|") 不是 symlink（規則可能沒有跨工具／跨機器同步）"
 done
+say ""
+
+# ── 6. @ 匯入有沒有指到不存在的檔 ─────────────────────────
+say "## 6. @ 匯入（指到不存在的檔＝那份規則安靜地沒載入）"
+# 全域：skills 裡的正本、每個帳號的 config dir（~/.claude-xxx/CLAUDE.md 不一定是 symlink）、rules
+imp_files=("$CLAUDE_HOME/CLAUDE.md" "$CLAUDE_HOME/AGENTS.md")
+for f in "$HOME"/.claude*/CLAUDE.md "$HOME"/.claude/rules/*.md; do [ -f "$f" ] && imp_files+=("$f"); done
+while IFS= read -r d; do
+  for f in "$d/CLAUDE.md" "$d/AGENTS.md" "$d"/.claude/rules/*.md; do [ -f "$f" ] && imp_files+=("$f"); done
+done < <(find "$PROJ" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) | sort)
+imp_out=$(check_imports "${imp_files[@]}")
+read -r _ imp_seen imp_refs imp_bad <<<"$(printf '%s\n' "$imp_out" | grep '^IMPORTS ')"
+printf '%s\n' "$imp_out" | grep -v '^IMPORTS '
+issues=$((issues + ${imp_bad:-0}))
+if [ -z "${imp_bad-}" ]; then
+  bad "這一節的檢查沒跑完（python 崩潰？），結果不可信"
+elif [ "${imp_seen:-0}" -lt 5 ]; then
+  bad "只讀到 ${imp_seen:-0} 個指令檔——路徑八成壞了，這一節的結果不可信"
+elif [ "${imp_bad:-0}" -eq 0 ]; then
+  ok "讀了 ${imp_seen} 個檔（含被匯入的）、${imp_refs} 個 @ 匯入，全部找得到"
+fi
 say ""
 
 say "---"

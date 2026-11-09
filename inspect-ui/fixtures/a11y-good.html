@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- 正例：無障礙三條都不該報。圖示按鈕各種合法的取名方式、會動的轉場有 reduced-motion、焦點用陰影替代外框。
+     另外（審查意見）：「User name」標籤、真名李四光不算假資料；0 0 0 3px 的選取環不算重陰影 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>無障礙正例</title>
+<style>
+  body { margin: 0; padding: 24px; font-family: -apple-system, "PingFang TC", sans-serif; background: #fff; color: #222; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .btn { transition: transform .2s; padding: 6px 10px; border: 1px solid #888; background: #fff; }
+  .btn:focus { outline: none; }
+  .btn:focus-visible { box-shadow: 0 0 0 3px #1a5fb4; }
+  .card { width: 320px; padding: 16px; border: 1px solid #ddd; background: #fff; }
+  .card.sel { box-shadow: 0 0 0 3px #1a5fb4; }
+  @media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
+</style>
+</head>
+<body>
+  <main>
+    <h1>無障礙正例</h1>
+    <p>
+      <button class="btn" type="button" aria-label="關閉">×</button>
+      <button class="btn" type="button" title="更多">⋯</button>
+      <button class="btn" type="button"><svg width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6" /></svg><span class="sr-only">刪除這一筆</span></button>
+      <a href="#" class="btn"><svg width="16" height="16"><title>首頁</title><circle cx="8" cy="8" r="6" /></svg></a>
+      <span id="lbl">下載報表</span><button class="btn" type="button" aria-labelledby="lbl">↓</button>
+      <button class="btn" type="button"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="列印" width="16" height="16" /></button>
+      <button class="btn" type="button">第 2 頁</button>
+      <input type="text" aria-label="搜尋" />
+    </p>
+    <p><label>User name <input type="text" /></label></p>
+    <section class="card sel"><h2>選取中的卡片</h2><p>地質學家李四光的年表，共 12 筆。</p></section>
+  </main>
+</body>
+</html>

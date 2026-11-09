@@ -51,7 +51,14 @@ fi
 # 每次照樣閃 0.2 秒：2026-10-21 使用者第四次說「godot 測試還是會跳出螢幕」，就是 session 寫了
 # `bgrun /Applications/Godot.app/Contents/MacOS/Godot …` 繞過 godot-bg。
 nofocus="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nofocus/godot-bg"
-if [ "$(basename "$1")" = Godot ] && [ -x "$nofocus" ] && [ "$1" != "$nofocus" ]; then
-  GODOT_REAL="$1" exec "$nofocus" "${@:2}"
+# 小寫 `godot`（Homebrew 的 symlink → Godot.app）也要認：2026-10-22 有 session 寫 `bgrun godot …`，
+# 檔名比對只認大寫 Godot，於是又繞過 godot-bg、在使用者畫面上閃（focus-keeper.log 13:00 那筆）。
+# 所以先照 PATH 找到實體、解開 symlink，再不分大小寫比檔名；GODOT_REAL 給解開後的路徑。
+real="$1"
+if [[ "$real" != */* ]]; then real="$(command -v "$real" 2>/dev/null || echo "$real")"; fi
+real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$real" 2>/dev/null || echo "$real")"
+base="$(basename "$real" | tr '[:upper:]' '[:lower:]')"
+if [ "$base" = godot ] && [ -x "$nofocus" ] && [ "$1" != "$nofocus" ]; then
+  GODOT_REAL="$real" exec "$nofocus" "${@:2}"
 fi
 exec "$@"

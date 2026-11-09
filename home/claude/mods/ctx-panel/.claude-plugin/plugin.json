@@ -1,0 +1,1 @@
+{ "name": "ctx-panel", "version": "0.1.0", "description": "唯讀 context 用量面板：跟 context-tier 同一套門檻，數字取自官方 session.measure", "types": "./types/index.d.ts" }

@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""waitfor —— 背景等待的唯一寫法：成功、失敗、程序死掉、逾時，四種結局都會退出。
+
+為什麼要這支（2026-10-27）：手寫的 `until …; do sleep; done` 一再空轉——
+  · 10-25 等 mani 出圖寫成 `ls done/J failed/J && break`：兩個路徑一定有一個不存在，`ls` 永遠失敗，
+    工作早就做完了，迴圈照樣跑滿 2 小時上限；使用者問了三次「done?」。
+  · 條件只寫成功訊號 → 崩潰、OOM、卡死都是靜悄悄的，一路等到上限（記憶 background-wait-filter-traps）。
+規則寫在記憶檔裡擋不住，所以改成工具＋hook（wait-guard.mjs 擋手寫的輪詢迴圈）。
+
+用法：
+  waitfor [選項] -- <成功條件>              成功條件是一段殼層指令，exit 0 就算成功
+    --fail CMD       失敗條件，exit 0 就算失敗（可給多個）
+    --pid PID        這個 pid 不在了就算程序死了（可給多個）
+    --alive CMD      這條指令 exit 非 0 就算程序死了（例如 `ssh mani pgrep -f train.py`）
+    --no-fail 理由   真的沒有失敗訊號時明說理由；上限會被壓到 30 分鐘
+    --every 秒       輪詢間隔，預設 30
+    --max 時長       上限，預設 2h（寫法 45s／90m／3h）；超過 12h 拒絕
+    --heartbeat 時長 每隔多久印一行還在等，預設 10m
+    --label 文字     印在每一行前面
+
+離開碼：0 成功｜1 失敗條件成立｜3 程序不在了｜124 逾時｜126/127 條件指令本身跑不起來｜2 用法錯或內部錯誤
+--alive 的指令逾時或 exit 255（ssh 連不上）不算死，只計數印在心跳裡。
+第一輪會把每個條件的離開碼與最後一行輸出印出來：條件寫錯（永遠不會成立）第一眼就看得到。
+
+例：
+  waitfor --every 60 --max 5h \\
+    --fail "ssh mani-ts 'test -d ~/autoloop-queue/failed/$J'" \\
+    -- ssh mani-ts "test -d ~/autoloop-queue/done/$J" && pixgen fetch $J
+  （遠端指令整段包引號：沒包的話 `~` 會先在本機展開成本機的家目錄，條件永遠不成立）
+  waitfor --pid $PID --fail "grep -qE 'Traceback|Killed' run.log" -- grep -q 'DONE' run.log
+"""
+import os
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import time
+
+USAGE = __doc__.split('用法：', 1)[1].split('離開碼', 1)[0]
+
+
+def die(msg, code=2):
+    print(f'waitfor：{msg}', file=sys.stderr, flush=True)
+    sys.exit(code)
+
+
+def dur(s):
+    m = re.fullmatch(r'(\d+(?:\.\d+)?)([smh]?)', s.strip())
+    if not m:
+        die(f'時長看不懂：{s}（寫法 45s／90m／3h）')
+    return float(m.group(1)) * {'': 1, 's': 1, 'm': 60, 'h': 3600}[m.group(2)]
+
+
+def fmt(sec):
+    sec = int(sec)
+    return f'{sec // 3600}h{sec % 3600 // 60:02d}m' if sec >= 3600 else f'{sec // 60}m{sec % 60:02d}s'
+
+
+def parse(argv):
+    o = {'fail': [], 'pid': [], 'alive': [], 'no_fail': None, 'every': 30.0, 'max': 7200.0,
+         'heartbeat': 600.0, 'label': '', 'max_given': False}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == '--':
+            # 一個參數＝整段殼層指令（可含管線）；多個參數照原樣引號接回去，`-- grep -q 'A B' f` 不會被拆字
+            rest = argv[i + 1:]
+            o['ok'] = rest[0] if len(rest) == 1 else shlex.join(rest)
+            break
+        if a in ('-h', '--help'):
+            print(__doc__)
+            sys.exit(0)
+        if a not in ('--fail', '--pid', '--alive', '--no-fail', '--every', '--max', '--heartbeat', '--label'):
+            die(f'不認得的選項 {a}（成功條件要寫在 -- 後面）\n用法：{USAGE}')
+        if i + 1 >= len(argv):
+            die(f'{a} 後面少了值')
+        v = argv[i + 1]
+        k = a[2:].replace('-', '_')
+        if k in ('fail', 'alive'):
+            o[k].append(v)
+        elif k == 'pid':
+            if not v.isdigit():
+                die(f'--pid 要是數字：{v!r}（變數是空的？）')
+            o['pid'].append(int(v))
+        elif k in ('every', 'max', 'heartbeat'):
+            o[k] = dur(v)
+            o['max_given'] |= k == 'max'
+        else:
+            o[k] = v
+        i += 2
+    if not o.get('ok', '').strip():
+        die(f'少了成功條件（寫在 -- 後面）\n用法：{USAGE}')
+    if not (o['fail'] or o['pid'] or o['alive'] or o['no_fail']):
+        die('沒有失敗或程序死掉的條件：工作崩潰的話會安靜地等到上限。'
+            '加 --fail／--pid／--alive；真的沒有失敗訊號就寫 --no-fail "理由"（上限壓到 30 分鐘）')
+    if o['no_fail'] and not (o['fail'] or o['pid'] or o['alive']):
+        o['max'] = min(o['max'], 1800.0) if o['max_given'] else 1800.0
+    if o['max'] > 12 * 3600:
+        die('上限超過 12h：拆成幾段，或改用排程（ScheduleWakeup／cron）')
+    if o['every'] < 1:
+        die('--every 至少 1 秒')
+    return o
+
+
+SHELL = os.environ.get('SHELL') if os.path.exists(os.environ.get('SHELL') or '') else '/bin/sh'
+
+
+def run(cmd, timeout):
+    """→ (離開碼, 最後一行輸出)。逾時算 124，整個程序群組一起殺（ssh 卡住時不留孤兒）。"""
+    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                         text=True, errors='replace', executable=SHELL, start_new_session=True)
+    try:
+        out, _ = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):  # 殼層已是殭屍時 macOS 回 EPERM
+            pass
+        try:  # 自己 setsid 的子程序殺不到又抓著 stdout：不等它，關管子走人
+            p.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.stdout.close()
+            p.wait(timeout=5)
+        return 124, f'（條件本身跑超過 {int(timeout)} 秒）'
+    tail = (out or '').strip().splitlines()
+    return p.returncode, tail[-1][:160] if tail else ''
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def main():
+    o = parse(sys.argv[1:])
+    tag = f'[{o["label"]}] ' if o['label'] else ''
+    say = lambda s: print(f'{time.strftime("%H:%M:%S")} {tag}{s}', flush=True)
+    ctimeout = max(30.0, min(o['every'] * 4, 300.0))
+    t0 = time.time()
+    last_beat = t0
+    first = True
+    unreachable = 0
+    say(f'開始等（每 {int(o["every"])} 秒看一次，上限 {fmt(o["max"])}）' + (f'；沒有失敗條件：{o["no_fail"]}' if o['no_fail'] else ''))
+    while True:
+        rc, out = run(o['ok'], ctimeout)
+        if first:
+            say(f'第一輪 成功條件 → exit {rc}' + (f'：{out}' if out else ''))
+        if rc == 0:
+            say(f'完成（{fmt(time.time() - t0)}）')
+            return 0
+        if rc in (126, 127):
+            say(f'成功條件本身跑不起來（exit {rc}）：{out}')
+            return rc
+        unreachable = unreachable + 1 if rc in (124, 255) else 0
+        for f in o['fail']:
+            frc, fout = run(f, ctimeout)
+            if first:
+                say(f'第一輪 失敗條件 {f[:60]!r} → exit {frc}' + (f'：{fout}' if fout else ''))
+            if frc == 0:
+                say(f'失敗條件成立：{f}' + (f'\n{fout}' if fout else ''))
+                return 1
+            if frc in (126, 127):
+                say(f'失敗條件本身跑不起來（exit {frc}）：{fout}')
+                return frc
+        gone = [str(p) for p in o['pid'] if not alive(p)]
+        for a in o['alive']:
+            arc, aout = run(a, ctimeout)
+            if first:
+                say(f'第一輪 存活條件 {a[:60]!r} → exit {arc}' + (f'：{aout}' if aout else ''))
+            if arc in (126, 127):
+                say(f'存活條件本身跑不起來（exit {arc}）：{aout}')
+                return arc
+            if arc in (124, 255):
+                unreachable += 1
+            elif arc != 0:
+                gone.append(a)
+        if gone:
+            # 程序剛好在兩次檢查之間做完：再看一次成功條件
+            if run(o['ok'], ctimeout)[0] == 0:
+                say(f'完成（{fmt(time.time() - t0)}）')
+                return 0
+            say(f'程序不在了，成功條件也沒成立：{", ".join(gone)}')
+            return 3
+        first = False
+        now = time.time()
+        if now - t0 >= o['max']:
+            say(f'逾時：等了 {fmt(now - t0)} 成功條件還沒成立（最後 exit {rc}' + (f'：{out}' if out else '') + '）')
+            return 124
+        if now - last_beat >= o['heartbeat']:
+            last_beat = now
+            note = f'；連 {unreachable} 次 exit 255／逾時（ssh 連不上？）' if unreachable >= 3 else ''
+            say(f'還在等，已 {fmt(now - t0)}／{fmt(o["max"])}（成功條件 exit {rc}{note}）')
+        time.sleep(min(o['every'], max(0.0, o['max'] - (time.time() - t0))))
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as e:  # 不准跟「失敗條件成立」的 1 撞號
+        print(f'waitfor：內部錯誤 {e!r}', file=sys.stderr, flush=True)
+        sys.exit(2)

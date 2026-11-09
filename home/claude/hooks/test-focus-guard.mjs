@@ -41,6 +41,13 @@ const cases = [
   [BLOCK, 'GD="/Applications/Godot.app/Contents/MacOS/Godot"; ${GD} --path game'],
   [BLOCK, 'export G=/Applications/Godot.app/Contents/MacOS/Godot; $G --path game'],
   [PASS, '/Applications/Godot.app/Contents/MacOS/Godot --version'],
+  // 2026-10-22：小寫 godot（Homebrew 的 symlink）一樣會開視窗
+  [BLOCK, 'godot --path game --script res://tests/ui_tour.gd'],
+  [BLOCK, '/opt/homebrew/bin/godot --path game'],
+  [BLOCK, 'G=godot; $G --path game'],
+  [PASS, 'godot --headless --path game --script res://tests/run_tests.gd'],
+  [PASS, '~/.claude/skills/home/claude/tools/bgrun godot --path game'],
+  [PASS, 'ls godot-projects'],
   // 旗標一起包進變數：值裡的 --headless 要算，值裡沒有就照擋（replay 2026-10-20 找到的形狀）
   [PASS, 'G="/Applications/Godot.app/Contents/MacOS/Godot --headless --path game"\nONLY=t.gd $G > m.log'],
   [BLOCK, 'G="/Applications/Godot.app/Contents/MacOS/Godot --path game"\nONLY=t.gd $G > m.log'],

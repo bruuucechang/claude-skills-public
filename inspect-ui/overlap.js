@@ -42,6 +42,9 @@ function leaves(root, win = window) {
     if (!hasText) continue;
     const cs = win.getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+    // 收起來的 <details> 裡的字：rect 照樣有大小（Chrome 把它放在 content-visibility: hidden 的槽裡），
+    // 但畫不出來。不擋的話每個收起來的段落都會跟它下面的東西報成重疊（2026-10-23 U10 實測，detchk）
+    if (typeof el.checkVisibility === 'function' && !el.checkVisibility()) continue;
     // 絕對／固定定位的東西本來就會疊在別人上面（浮動訊息、抽屜），不算破圖
     if (floating(el, win)) continue;
     const clip = clipRect(el, win);          // ← 捲出容器外的部分不算數

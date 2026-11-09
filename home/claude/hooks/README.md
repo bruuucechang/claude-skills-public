@@ -36,14 +36,21 @@ async 的回報（`pane-state`、session-remote 的 `report.mjs`、office 的 `s
 |---|---|
 | `SessionStart` | 開場提醒（`session-start-context.txt`）、`session-restore`、`blocks-current`、`update-check`、`account-check`、`session-title` |
 | `UserPromptSubmit` | `context-tier`、`account-drain`、`session-title` |
-| `Stop` | `ask-with-options`、`lang-guard`、`account-drain`、`session-journal` |
+| `Stop` | `ask-with-options`、`lang-guard`、`zh-guard`、`account-drain`、`session-journal` |
 | `StopFailure`（matcher `rate_limit`） | `rate-limit-switch`（輸出被 Claude Code 忽略，只做副作用） |
-| `PreToolUse` Bash | `git-author-guard`、`commit-message-guard`、`pushq-guard`、`pr-guard`、`focus-guard`、`kill-guard` |
-| `PreToolUse` AskUserQuestion | `ask-hides-prose` |
+| `PreToolUse` Bash | `git-author-guard`、`commit-message-guard`、`pushq-guard`、`pr-guard`、`focus-guard`、`kill-guard`、`git-wipe-guard`、`wait-guard` |
+| `PreToolUse` AskUserQuestion | `ask-hides-prose`、`ask-preview-length`（preview 超過 8 行擋）、`zh-guard` |
 | `PreToolUse` browser_batch | `browser-batch-guard` |
 
 - `kill-guard` 擋 pkill／killall／`kill $(pgrep …)`（只准 `kill <自己記的 pid>`）；`lang-guard` 擋英文收尾、一回合最多擋一次。
   測試 `node test-kill-guard.mjs`、`node test-lang-guard.mjs`；拿近 N 天真實紀錄重播：`node replay-p3.mjs kill|lang 14`。
+- `wait-guard` 擋手寫的輪詢迴圈（until／while／for 加 sleep），要求改用 `tools/waitfor`（成功、失敗、程序死掉、逾時都會退出）；
+  只有 Claude Code 掛（Codex 沒有背景任務叫醒機制）。測試 `node test-wait-guard.mjs`，重播 `node test-wait-guard.mjs --replay 14`。
+- `git-wipe-guard` 擋會整片清掉工作區的 git 指令：`reset --hard`（已追蹤的檔都沒改動時放行）、`checkout .`／`restore .`、`clean -f`、`branch -D`、
+  不帶 pathspec 的 `stash`／`stash clear`；`push` 不管。逃生門 `git-wipe-guard.off`，測試 `node test-git-wipe-guard.mjs`。
+- `zh-guard` 擋回覆收尾與選項框裡的簡體字（每次都擋）與台灣不常用的冷僻字（多半是打錯，同一個 session 同一個字只擋一次）。
+  字表 `zh-simplified.txt`、`zh-common.txt` 由 `build-zh-tables.py` 產（要 OpenCC，做法寫在檔頭）；確定沒錯的字加進手寫的 `zh-allow.txt`。
+  測試 `node test-zh-guard.mjs`；重播 `node replay-p3.mjs zh 14`。
 - 每支檢查 `export run(input)`，回 null／物件／字串；**run 裡不准 `process.exit`、不准讀 stdin**（共用 `lib/hook-cli.mjs`）。
   單獨執行照樣能用（除錯用）。
 - 單一檢查丟例外或逾時：跳過、記一行 `dispatch.log`；分派器自己壞掉：exit 0 不輸出（＝放行）。
@@ -299,10 +306,16 @@ cat   ~/.claude/cache/update-check.json                        # 看快取
 
 ## session-title.mjs（SessionStart ＋ UserPromptSubmit）
 
-專案 session 自動取名（2026-10-16 使用者裁示：不要視窗編號，要人看得懂的名字）。
-cwd 在 `~/Projects/<名字>/` 底下才算專案：開場標題掛 `<名字>`，第一句非斜線指令的話送出後補成
-`<名字>｜<摘要>`（去客套開頭、截 18 字）。resume／compact 不動。走 `hookSpecificOutput.sessionTitle`。
+每個 session 自動取名「專案名｜專案細項」（2026-10-16 裁示不要視窗編號；2026-10-22 擴大到每個 session、細項改用 Haiku）。
+- 開場：cwd 在 `~/Projects/<名字>/` → 掛 `<名字>`；在 `~/.claude*` → `claude設定`；其他先不掛。
+- 第一句非斜線指令：馬上給規則版 `<專案>｜<截第一句>`（專案認不出來就看句子有沒有提到專案名，再不行是 `雜項`），
+  同時背景跑 `claude -p --model haiku`（本檔 `--name` 模式，約 5～6 秒）挑專案、寫 10 字內細項，
+  在 transcript 補一行 custom-title；之後任一句送出時再把 Haiku 版套到畫面上。
+- Stop／PostToolUse 回 `sessionTitle` 沒作用（2026-10-22 實測），所以畫面上要等下一句才換。resume／compact 不動。
+- 不叫 Haiku 的情況：headless（`CLAUDE_CODE_ENTRYPOINT=sdk-cli`，`claude -p`、派工的背景 session）只給規則版；
+  使用者中途 `/rename` 過（transcript 最後一個 custom-title 不是我們給的）就不蓋掉。失敗記在 `hooks/session-title.log`。
 
-重跑驗證：`cd ~/Projects/palrogue && claude -p --model haiku "回答 1+1"`，再到
-`~/.claude-work/projects/-Users-bruuucemac-Projects-palrogue/<session>.jsonl` 找 `"type":"custom-title"`。
+重跑驗證：`node hooks/test-session-title.mjs`；實跑 Haiku 那段要模擬互動 session（headless 不會叫）：
+`CLAUDE_CODE_ENTRYPOINT=cli`，餵 SessionStart 再餵一句帶 `transcript_path` 的 UserPromptSubmit 給 `node hooks/session-title.mjs`，
+約 10 秒後 `$TMPDIR/claude-session-title/<session_id>` 變 `"phase":"ready"`、transcript 尾端多一行 custom-title。
 逃生門：`touch hooks/session-title.off`。

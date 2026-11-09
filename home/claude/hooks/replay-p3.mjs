@@ -4,6 +4,7 @@
  *
  *     node ~/.claude/skills/home/claude/hooks/replay-p3.mjs kill [天數=14]
  *     node ~/.claude/skills/home/claude/hooks/replay-p3.mjs lang [天數=14] [輸出 JSON]
+ *     node ~/.claude/skills/home/claude/hooks/replay-p3.mjs zh [天數=14] [輸出 JSON]
  *
  * 兩個帳號都掃（~/.claude/projects、~/.claude-work/projects），子代理的 transcript 不算。
  * 呼叫的是 hook 本身匯出的判斷式，不另外抄一份。
@@ -13,6 +14,8 @@
  *       「真的在跑」用一條比 hook 粗的正規式先抓，不一致的逐筆印出來給人看。
  * lang：每個互動（entrypoint 不是 sdk-*，跟 hook 的放行條件一樣）回合的最後一則助理文字，算中日韓字／拉丁字母，
  *       印出各門檻下會擋幾則；第三個參數給了就把每一則的數字寫成 JSON，方便人工抽查。
+ * zh：zh-guard 會擋什麼——同樣的回合最後一則（只看 lang-guard 沒擋的，擋了的會先被重寫）＋每一次 AskUserQuestion，
+ *     冷僻字照 hook 的規則「同一個 session 同一個字只算第一次」。逐筆印出字與前後文給人判斷是不是誤擋。
  */
 import { createReadStream, existsSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -113,7 +116,45 @@ if (MODE === 'kill') {
   console.log(`C 混合 ${C.length} 則（逐則看）：`);
   for (const r of C) console.log(`  [${L.isEnglish(r.text) ? '擋' : '放'}] 中${r.cjk} 英${r.latin} ${r.acct} ${r.s} | ${r.text.replace(/\s+/g, ' ').slice(0, 110)}`);
   if (OUT) writeFileSync(OUT, JSON.stringify(rows.map((r) => ({ ...r, en: L.isEnglish(r.text) })), null, 1));
+} else if (MODE === 'zh') {
+  const L = await import('./lang-guard.mjs');
+  const Z = await import('./zh-guard.mjs');
+  const rows = [];
+  let turns = 0, asks = 0;
+  for (const { acct, p } of transcripts()) {
+    let entry = null, last = null;
+    const seen = new Set();
+    const s = p.split('/').pop().slice(0, 8);
+    const check = (where, text, ts) => {
+      const f = Z.findings(text);
+      f.rare = f.rare.filter((r) => !seen.has(r.ch));
+      f.rare.forEach((r) => seen.add(r.ch));
+      if (f.simplified.length || f.rare.length || f.typo.length) rows.push({ acct, s, day: (ts || '').slice(0, 10), where, ...f });
+    };
+    for await (const o of lines(p)) {
+      if (!entry && o.entrypoint) entry = o.entrypoint;
+      if (o.type === 'assistant' && !o.isSidechain && Array.isArray(o.message?.content)) {
+        const t = o.message.content.filter((b) => b.type === 'text' && b.text?.trim()).map((b) => b.text).join('\n');
+        if (t) last = { t, ts: o.timestamp };
+        for (const b of o.message.content) {
+          if (b.type === 'tool_use' && b.name === 'AskUserQuestion' && Date.parse(o.timestamp || 0) >= cut) { asks++; check('ask', Z.askText(b.input), o.timestamp); }
+        }
+      }
+      if (o.type === 'system' && o.subtype === 'turn_duration') {
+        if (last && entry && !/^sdk/.test(entry) && Date.parse(last.ts || 0) >= cut && !L.SYSTEM.test(last.t) && !L.isEnglish(last.t)) { turns++; check('stop', last.t, last.ts); }
+        last = null;
+      }
+    }
+  }
+  const by = (w, k) => rows.filter((r) => r.where === w && r[k].length).length;
+  console.log(`近 ${DAYS} 天：回合收尾 ${turns} 則、選項框 ${asks} 次`);
+  console.log(`簡體字擋：收尾 ${by('stop', 'simplified')}、選項 ${by('ask', 'simplified')}`);
+  console.log(`冷僻字擋：收尾 ${by('stop', 'rare')}、選項 ${by('ask', 'rare')}`);
+  console.log(`相近錯字擋：收尾 ${by('stop', 'typo')}、選項 ${by('ask', 'typo')}`);
+  const fmt = (xs) => xs.map((x) => `${x.ch}（${x.ctx}）`).join(' ');
+  for (const r of rows) console.log(`- ${r.where} ${r.acct} ${r.day} ${r.s}${r.simplified.length ? ` 簡：${fmt(r.simplified)}` : ''}${r.rare.length ? ` 僻：${fmt(r.rare)}` : ''}${r.typo?.length ? ` 錯：${fmt(r.typo)}` : ''}`);
+  if (OUT) writeFileSync(OUT, JSON.stringify(rows, null, 1));
 } else {
-  console.error('用法：replay-p3.mjs kill|lang [天數] [輸出 JSON]');
+  console.error('用法：replay-p3.mjs kill|lang|zh [天數] [輸出 JSON]');
   process.exit(2);
 }

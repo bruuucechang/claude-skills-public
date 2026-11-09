@@ -57,6 +57,9 @@ description: 「push」「推上去」「/ship」或 commit 之前跑。一氣�
    4. 擋下 → 在 `$W` 修、**在 `$W` 重跑第 2 步的專案驗證**（缺依賴就把共用 checkout 的 `node_modules`／`.venv` 之類 symlink 過去）、
       commit、push 同一分支、重審。**PR 不留給使用者按**（2026-10-21 裁示）：兩輪後還擋，逐條裁定——
       確定會壞的繼續修；推論型、故意繞（不在威脅模型）、清理建議在 PR 留言寫明理由後合併，回報時列出。
+      修 bug 補的回歸測試要**看它紅一次**才算數，做法照 `debug` skill 第五步（不碰 index、最後 `git status --porcelain` 為空）。
+      **確定會壞的正確性問題一律照修**；只有推論型、清理、「做完整一點」這類可以不照改——
+      跟使用者裁示衝突的，留言寫明是哪條裁示；「做完整」先 grep 有沒有人用到，沒人用就不做。
       **不碰 GitHub 規範**：不用別的帳號 approve 自己、不 `gh pr merge --admin`、不改 branch protection、不關 required checks。
    5. 通過 → **先** `git worktree remove "$W"`（分支還被 worktree 佔著時 `--delete-branch` 刪不掉本機分支）→
       `gh pr merge <號> --squash --delete-branch`。

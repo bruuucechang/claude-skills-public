@@ -5,6 +5,7 @@
  *       https://github.com/pbakaus/impeccable
  *       commit ece38d9904b8a619b3f77cab476eacad09c4fb11
  *       規則清單：crates/live/assets/antipatterns.json（61 條）
+ *       另加：app-* 15 條改寫自 Leonxlnx/taste-skill（MIT），a11y-* 3 條與 text-clipped 新寫——出處寫在那一段開頭
  *       規則邏輯：crates/core/src/browser/*.rs、crates/core/src/checks/*.rs、
  *                 crates/detect/src/regex_matchers.rs（buzzword／cadence／broken-image）
  *       原作 Copyright (c) 2026 Paul Bakaus，依 Apache License 2.0 授權。
@@ -20,6 +21,8 @@
  *   設計系統      { 字型: [...], 顏色: ['#112233', ...], 圓角: [8, 12], 字級: [14, 16, 24],
  *                  允許膠囊圓角: true, 宣告的選擇器: ['.eyebrow'] }
  *                 —— 沒給就不跑 design-system-* 四條（放進「略過」）
+ *   工具畫面      false 時不跑 app-* 那 15 條（行銷頁、遊戲畫面用）；預設會跑
+ *   不移動焦點    true 時不跑 a11y-focus-ring（它會真的 focus()／blur()，頁面有 focus／blur 處理器時用）
  *   只列規則      true 時只回傳規則清單，不掃描
  *   錯誤收集器    script-error 讀的陣列名稱（預設 '__designScanErrors'），
  *                 要在頁面載入前用 addInitScript 裝好（見 design-rules.md）
@@ -1909,6 +1912,9 @@
       if (isScreenReaderOnly(el)) continue;
       let sc = false; for (let p = el; p; p = p.parentElement) if (scrollRegion(p)) { sc = true; break; }
       if (sc) continue;
+      const ox = cs(el).overflowX;
+      // 加碼：裁掉沒溢出，交給 text-clipped（條件跟它一樣，inline 與量不到寬度的照舊在這裡報）
+      if ((ox === 'hidden' || ox === 'clip') && cs(el).textOverflow !== 'ellipsis' && el.clientWidth > 0 && cs(el).display !== 'inline') continue;
       const cw = el.clientWidth, delta = el.scrollWidth - cw, r = rectOf(el);
       if (cw > 0 && delta >= 16) { out.push(hit(el, `${classSel(el)} 超出自己的框 ${Math.round(delta)}px`)); continue; }
       if (cw === 0 && r.width > 0) {
@@ -1919,6 +1925,78 @@
         const spill = r.right - (rectOf(c).left + c.clientLeft + c.clientWidth);
         if (spill >= 16) out.push(hit(el, `${classSel(el)} 超出容器 ${Math.round(spill)}px`));
       }
+    }
+    return out;
+  }
+  // 新寫（U13）：欄位裝不下字。text-overflow 要差 16px 才報，而切掉最後一個字只差幾 px；
+  // 輸入框的值本來就不是文字節點，它完全看不到。被切的是資料（帳號、金額），所以差 2px 就報。
+  // 日期時間類不在裡面：Chrome 的 date／time 欄位 scrollWidth 永遠等於 clientWidth，被切也量不到，也不顯示提示字
+  const CLIP_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'tel', 'url', 'number', 'password']);
+  let measureCtx = null;
+  function placeholderWidth(el) {
+    const ps = pcs(el, '::placeholder') || cs(el);
+    measureCtx = measureCtx || D.createElement('canvas').getContext('2d');
+    measureCtx.font = `${ps.fontStyle} ${ps.fontWeight} ${ps.fontSize} ${ps.fontFamily}`;
+    const ls = num(ps.letterSpacing) * Array.from(el.placeholder).length;
+    return measureCtx.measureText(el.placeholder).width + ls;
+  }
+  // 框自己的字＋一路都是 inline 的子元素裡的字（「帳號：<a>0123…</a>」的連結也算這個框的字）；
+  // 遇到 inline-block、block 就停，那是另一個框，由它自己報
+  function inlineTextRects(el) {
+    const out = [];
+    const walk = node => {
+      for (const c of node.childNodes) {
+        if (c.nodeType === 3) {
+          if (!c.textContent.trim()) continue;
+          const r = D.createRange(); r.selectNodeContents(c);
+          for (const rr of r.getClientRects()) if (rr.width > 0 && rr.height > 0) out.push(rr);
+        } else if (c.nodeType === 1 && cs(c).display === 'inline' && !isScreenReaderOnly(c)) walk(c);
+      }
+    };
+    walk(el);
+    return out;
+  }
+  function textClipped() {
+    const out = [];
+    const scrollRegion = el => /(auto|scroll)/.test(cs(el).overflowX) || /(auto|scroll)/.test(cs(el).overflow);
+    const clips = v => v === 'hidden' || v === 'clip';
+    for (const el of elements()) {
+      if (el.namespaceURI === 'http://www.w3.org/2000/svg' || !isRenderedForRule(el) || isScreenReaderOnly(el)) continue;
+      const t = tagOf(el), cw = el.clientWidth;
+      if (cw <= 0) continue;
+      if (t === 'input') {
+        // 有焦點的也照報：autofocus 或重播最後點到的那格常常就是最長的值，打字時被切一樣看不到
+        if (!CLIP_INPUT_TYPES.has((el.getAttribute('type') || '').toLowerCase())) continue;
+        // 提示字不算進 scrollWidth，用它的字型量字寬
+        const delta = el.value ? el.scrollWidth - cw : el.placeholder ? Math.ceil(placeholderWidth(el) - (cw - num(cs(el).paddingLeft) - num(cs(el).paddingRight))) : 0;
+        if (delta <= 1) continue;
+        const shown = el.value ? `值「${clip(el.value, 24)}」` : `提示字「${clip(el.placeholder, 24)}」`;
+        out.push(hit(el, `${classSel(el)} 的${shown}比框寬 ${Math.round(delta)}px（框內寬 ${cw}px）`));
+        continue;
+      }
+      if (el.scrollWidth - cw <= 1) continue;
+      const cell = t === 'td' || t === 'th';
+      // 格子看整格的字（常包在 span 裡）；其他元素下面只量自己與 inline 子元素的字，免得一個被切的字報成一整串祖先
+      if (TEXT_OVERFLOW_SKIP_TAGS.has(t) || !collapse(el.textContent)) continue;
+      const s = cs(el);
+      if (s.textOverflow === 'ellipsis' || s.display === 'inline') continue; // 刻意的省略號；inline 的 scrollWidth 沒有意義
+      const cut = clips(s.overflowX) || clips(s.overflow);
+      // 格子量整格（字常包在 span 裡）；其他裁切框量自己的字到框右緣（padding box），
+      // 不用 scrollWidth——裝飾的偽元素、超出去的圖也會撐大它，那不是字被切
+      let delta = el.scrollWidth - cw;
+      if (!cell) {
+        const rs = inlineTextRects(el);
+        if (!rs.length) continue;
+        const L = rectOf(el).left + el.clientLeft;
+        delta = Math.ceil(s.direction === 'rtl' ? L - Math.min(...rs.map(r => r.left)) : Math.max(...rs.map(r => r.right)) - (L + cw));
+      }
+      if (delta <= 1) continue;
+      // 沒裁掉、差 16px 以上的是 text-overflow 的事，不重複報
+      if (!cut && (delta >= 16 || !cell)) continue;
+      // 溢出（沒裁掉）的字在可捲的祖先裡捲得到；裁掉的捲不到，照報
+      let sc = false; if (!cut) for (let p = el.parentElement; p; p = p.parentElement) if (scrollRegion(p)) { sc = true; break; }
+      if (sc) continue;
+      out.push(hit(el, `${classSel(el)} 的字「${clip(collapse(el.textContent), 24)}」${cut ? '被裁掉' : '超出格子'} ${Math.round(delta)}px（框內寬 ${cw}px）`));
     }
     return out;
   }
@@ -1964,6 +2042,292 @@
   }
 
   // ───────────────────────── DESIGN.md 設計系統（需要選項） ─────────────────────────
+
+  // ───────────────────────── 工具畫面（後台、儀表板、清單、設定頁） ─────────────────────────
+  // 出處：改寫自 Leonxlnx/taste-skill（MIT，Copyright (c) 2026 Leonxlnx）
+  //       commit 6010f91a9935f1c167dfc500fb1a475681892e6b
+  //       skills/taste-skill/scripts/lib/probe.mjs 的 app()（量測）＋ scripts/lib/rules.mjs 的 judgeApp()（門檻）
+  // 門檻照原作；改的地方：數字與假資料認得中文（元、筆、公斤、王小明…）、KPI 數字可以帶單位子元素、
+  // 浮層（dialog、選單）不算面板、手機上的側欄寬度上限放寬到 80%（原作 45%，寬抽屜量不到）。
+  // colourShare（要截圖）與 below-fold、icon-chips 沒搬。
+
+  const NUM_UNIT = '(?:%|‰|[kKmMbB萬億千]|元|塊|筆|件|個|次|人|位|天|日|週|周|月|年|小時|時|分鐘|分|秒|毫秒|張|台|頁|則|項|座|隻|株|公斤|公克|克|公里|公尺|公分|公升|毫升|kg|g|km|m|cm|mm|ml|ms|s|h|min|GB|MB|KB|kB|TB|x|×|倍|°C|℃|度|點|折|名|戶|輛|份|本|篇|條|組|顆|瓶|箱|包|杯|票|單|字)';
+  const NUM_RE = new RegExp(`^[−\\-+±]?\\s?(?:NT\\$|US\\$|HK\\$|[$€£¥￥₩]|TWD|USD|JPY)?\\s?\\d[\\d,.\\s]*(?:\\s?${NUM_UNIT}){0,2}$`);
+  // 英文區分大小寫（「User name」是正常的欄位標籤，「User Name」整句大寫才像假資料）；
+  // 中文名字前後不能緊接漢字（李四光、張三豐是真名）
+  const CJK_NAME = n => `(?<![\\u4e00-\\u9fff])(?:${n})(?![\\u4e00-\\u9fff])`;
+  const PLACEHOLDER_RE = new RegExp([
+    '\\b(?:John|Jane) Doe\\b', '\\bAcme(?: Inc| Corp)?\\b', '\\b[Ll]orem ipsum\\b', '\\bexample\\.com\\b', '\\bUser Name\\b',
+    '\\bFirstname Lastname\\b', '\\b123 Main St\\b', '\\bfoo(?:bar)?\\b',
+    CJK_NAME('王小明|王大明|陳小美|林小華|張三|李四|王五|趙六'), '某某(?:公司|先生|小姐|人)?', '[○〇]{2,}', 'ＸＸ+',
+    '測試(?:資料|用戶|使用者|帳號|公司|名稱)', '範例(?:公司|資料|名稱|文字)', '假資料', '示範(?:公司|用戶|資料)',
+    '0912-?345-?678', '09\\d{2}-?000-?000', '1234-5678', 'test@(?:test|example)\\.',
+  ].join('|'), 'g');
+  const OVERLAY = 'dialog, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [role="tooltip"], [popover]';
+
+  function appMeasure() {
+    const Wd = vw(), H = vh(), SY = W.scrollY || 0, B = D.body;
+    const white = { r: 255, g: 255, b: 255, a: 1 };
+    const groundOf = el => { for (let p = el; p; p = p.parentElement) { const v = parseColor(cs(p).backgroundColor); if (v && alphaOf(v) >= 0.9) return v; } return white; };
+    const pageGround = groundOf(B);
+    const all = elements();
+    const phone = Wd < 600;
+    // 1. 外殼：貼左邊、夠高、有三個以上連結或按鈕的欄＝側欄
+    let sidebar = null;
+    for (const el of all) {
+      const r = rectOf(el); if (r.width < 48) continue;
+      if (r.left >= -1 && r.left <= 1 && r.top <= 80 && r.height >= H * 0.7 && r.width <= Math.min(360, Wd * (phone ? 0.8 : 0.45)) && qsa(el, 'a, button').length >= 3
+        // 手機上超過 45% 寬的只認真的導覽列（畫布、主內容區也是貼左又高）
+        && (r.width <= Wd * 0.45 || matches(el, 'nav, aside, [role="navigation"]') || !!el.querySelector('nav, [role="navigation"]'))) {
+        sidebar = { w: Math.round(r.width), el, share: r.width / Wd }; break;
+      }
+    }
+    // 2. 內容實際用到畫布的哪裡（側欄右邊）：文字本身的框、圖、圖表、控制項
+    const x0 = sidebar ? sidebar.w : 0;
+    const boxes = [];
+    const tw = D.createTreeWalker(B, NodeFilter.SHOW_TEXT); const trg = D.createRange();
+    for (let n = tw.nextNode(); n && boxes.length < 5000; n = tw.nextNode()) {
+      const p = n.parentElement;
+      if (n.nodeValue.trim().length < 2 || !p || closest(p, 'svg') || !isVisible(p)) continue;
+      trg.selectNodeContents(n); const r = trg.getBoundingClientRect();
+      if (r.width < 2 || r.left < x0 - 1 || (cs(p).position === 'fixed' && r.left > Wd * 0.5)) continue;
+      boxes.push(r);
+    }
+    for (const el of qsa(B, 'svg, canvas, img, video, input, select, textarea, button, table')) {
+      if (el.parentElement && closest(el.parentElement, 'svg')) continue;
+      const r = rectOf(el); if (r.width < 8 || r.height < 8 || r.left < x0 - 1 || !isVisible(el)) continue;
+      boxes.push(r);
+    }
+    const rights = boxes.map(r => r.right).sort((a, b) => a - b), lefts = boxes.map(r => r.left).sort((a, b) => a - b);
+    const canvas = boxes.length ? { left: Math.round(lefts[Math.floor(lefts.length * 0.02)] - x0), right: Math.round(Wd - rights[Math.floor(rights.length * 0.98)]) } : null;
+    // 3. 面板：底色比地面差一階、有框、或有陰影的盒子
+    const panels = []; const radii = new Map(); const heavyBorders = [], heavyShadows = [];
+    for (const el of all) {
+      const r = rectOf(el); if (r.width < 140 || r.height < 72 || r.width > Wd * 0.98) continue;
+      if (closest(el, OVERLAY) || cs(el).position === 'fixed') continue;
+      const s = cs(el);
+      const bg = parseColor(s.backgroundColor) || { r: 0, g: 0, b: 0, a: 0 }, bw = num(s.borderTopWidth), bc = parseColor(s.borderTopColor);
+      const ground = groundOf(el.parentElement || B);
+      const filled = alphaOf(bg) >= 0.9 && contrast(bg, ground) >= 1.04;
+      const bordered = bw >= 0.5 && s.borderTopStyle !== 'none' && bc && alphaOf(bc) > 0.05;
+      const sh = s.boxShadow !== 'none' ? s.boxShadow : '';
+      if (!filled && !bordered && !sh) continue;
+      if (!collapse(el.textContent)) continue;
+      panels.push({ el, w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top + SY), left: Math.round(r.left), bottom: Math.round(r.bottom + SY), right: Math.round(r.right) });
+      const rad = Math.round(num(s.borderTopLeftRadius)); radii.set(rad, (radii.get(rad) || 0) + 1);
+      const under = alphaOf(bg) >= 0.9 ? bg : ground;
+      if (bordered) { const c = contrast({ ...bc, a: 1 }, under); if (c >= (luminance(ground) > 0.4 ? 1.45 : 1.9)) heavyBorders.push({ el, 細節: `框線 ${hex(bc)} 在 ${hex(under)} 上（${c.toFixed(2)}:1）` }); }
+      if (sh) {
+        for (const part of splitTopLevel(sh)) {
+          if (/inset/.test(part)) continue;
+          const col = part.match(/rgba?\([^)]+\)/); const nums = part.replace(/rgba?\([^)]+\)/, '').trim().split(/\s+/).map(parseFloat);
+          const a = col ? alphaOf(parseColor(col[0])) : 1; const blur = nums[2] || 0, y = Math.abs(nums[1] || 0);
+          if (a <= 0.02 || (blur === 0 && y === 0 && !(nums[0] || 0))) continue; // 零位移零模糊＝選取／焦點環，不是陰影
+          if (blur + (nums[3] || 0) <= 2 && y <= 2) continue; // 2px 以內的貼邊陰影（書背、按鈕底）不會看起來浮起來；原作沒有這條
+          // 深色地面上黑影幾乎看不到，近乎不透明才算
+          const dark = luminance(ground) < 0.2;
+          if (dark ? a >= 0.45 : ((a >= 0.12 && blur >= 12) || y >= 8 || a >= 0.25)) { heavyShadows.push({ el, 細節: clip(part.trim(), 70) }); break; }
+        }
+      }
+    }
+    // 只看最外層的面板（面板裡的卡片算它的一部分）：同一列底邊不齊、面板裡的空白帶
+    const panelEls = new Set(panels.map(p => p.el));
+    const tops = panels.filter(p => { for (let a = p.el.parentElement; a && a !== B; a = a.parentElement) if (panelEls.has(a)) return false; return p.w < Wd * 0.97 || p.h < H * 2; });
+    // 間隔 24px 以內疊起來的一欄卡片算一塊：左邊兩張疊起來跟右邊一張高的齊平，不算參差
+    const below = p => tops.find(q => q !== p && Math.abs(q.left - p.left) <= 4 && Math.abs(q.w - p.w) <= 4 && q.top >= p.bottom - 2 && q.top - p.bottom <= 24);
+    const columnBottom = p => { let b = p.bottom; for (let q = below(p), n = 0; q && n < 12; q = below(q), n++) b = q.bottom; return b; };
+    const ragged = [];
+    for (let i = 0; i < tops.length; i++) for (let k = i + 1; k < tops.length; k++) {
+      const a = tops[i], b = tops[k];
+      if (Math.abs(a.top - b.top) > 4 || a.w < 200 || b.w < 200 || (a.right > b.left - 4 && b.right > a.left - 4)) continue;
+      const diff = Math.min(Math.abs(a.bottom - b.bottom), Math.abs(columnBottom(a) - columnBottom(b))), tall = Math.max(a.h, b.h);
+      if (diff > Math.max(24, tall * 0.12)) ragged.push({ el: a.el, diff: Math.round(diff) });
+    }
+    // 卡片裡最大的一條空白帶：內容片段之間的垂直空隙，或最後一段到 padding 邊
+    const voids = [];
+    for (const p of tops) {
+      if (matches(p.el, 'nav, aside, header, footer, [role="navigation"]') || p.el.querySelector('nav') || (sidebar && p.left < sidebar.w - 4) || p.h < 120) continue;
+      if (panels.filter(q => q.el !== p.el && p.el.contains(q.el)).length >= 2) continue; // 一框卡片，不是一張卡片
+      const s = cs(p.el), pr = rectOf(p.el);
+      const inTop = pr.top + num(s.borderTopWidth) + num(s.paddingTop), inBottom = pr.bottom - num(s.borderBottomWidth) - num(s.paddingBottom);
+      const bg = parseColor(s.backgroundColor) || { r: 0, g: 0, b: 0, a: 0 }, spans = [];
+      const tw2 = D.createTreeWalker(p.el, NodeFilter.SHOW_TEXT), rg = D.createRange();
+      // 開新段落的字（標題、summary、14px/600 或 15px/500 以上）前面可以有比較寬的刻意空隙
+      for (let n = tw2.nextNode(); n; n = tw2.nextNode()) {
+        const pe = n.parentElement;
+        if (!n.nodeValue.trim() || !pe || closest(pe, 'svg') || !isVisible(pe)) continue;
+        rg.selectNodeContents(n); const r = rg.getBoundingClientRect();
+        if (r.height > 0 && r.width > 0) { const ps = cs(pe); const fs = num(ps.fontSize), fw = num(ps.fontWeight); spans.push([r.top, r.bottom, !!closest(pe, 'h1, h2, h3, h4, h5, h6, [role="heading"], summary, legend, caption') || (fw >= 600 && fs >= 14) || (fw >= 500 && fs >= 15)]); }
+      }
+      for (const el of qsa(p.el, '*')) {
+        if (el.parentElement && closest(el.parentElement, 'svg')) continue;
+        const r = rectOf(el); if (r.width < 2 || r.height < 1 || !isVisible(el)) continue;
+        if (/^(svg|canvas|img|video|input|select|textarea|button|hr|progress|meter|iframe)$/i.test(el.tagName)) { spans.push([r.top, r.bottom]); continue; }
+        const es = cs(el), fillC = parseColor(es.backgroundColor);
+        if (fillC && alphaOf(fillC) >= 0.1 && (alphaOf(bg) < 0.9 || contrast({ ...fillC, a: 1 }, bg) >= 1.03) && r.height >= 2) spans.push([r.top, r.bottom]);
+        if (num(es.borderTopWidth) >= 0.5 && es.borderTopStyle !== 'none' && alphaOf(parseColor(es.borderTopColor) || { a: 0 }) > 0.05) spans.push([r.top, r.top + 1]);
+        if (num(es.borderBottomWidth) >= 0.5 && es.borderBottomStyle !== 'none' && alphaOf(parseColor(es.borderBottomColor) || { a: 0 }) > 0.05) spans.push([r.bottom - 1, r.bottom]);
+      }
+      const ys = spans.filter(([a, b]) => b > inTop - 2 && a < inBottom + 2).sort((a, b) => a[0] - b[0]);
+      if (!ys.length) continue;
+      // 超過 40px 才算；後面接的是新段落就要超過 64px
+      let end = ys[0][1], gap = 0;
+      for (const [a, b] of ys.slice(1)) { const g = a - end, section = ys.some(([t, , hd]) => hd && Math.abs(t - a) < 6); if (g > (section ? 64 : 40) && g > gap) gap = g; end = Math.max(end, b); }
+      if (inBottom - end > 40 && inBottom - end > gap) gap = inBottom - end;
+      if (gap > 40) voids.push({ el: p.el, gap: Math.round(gap) });
+    }
+    // 4. 數字：表格的數字格與 KPI
+    const cells = qsa(B, 'td, [role="cell"], [role="gridcell"]').filter(el => isVisible(el) && NUM_RE.test(collapse(el.textContent)));
+    const leftNums = cells.filter(el => { const a = cs(el).textAlign; const inner = el.firstElementChild ? cs(el.firstElementChild).textAlign : a; return /left|start/.test(a) && /left|start/.test(inner) && cs(el).justifyContent !== 'flex-end'; });
+    // 原作只看沒有子元素的葉節點；這裡看「自己的字」，所以 <span>128.4<span class="unit">公斤</span></span> 也算
+    const figures = [];
+    for (const el of all) {
+      if (closest(el, 'svg, input, select, textarea, option')) continue;
+      const t = collapse(directText(el)); if (t.length < 2 || !NUM_RE.test(t)) continue;
+      const s = cs(el); figures.push({ el, size: num(s.fontSize), tabular: /tabular-nums/.test(s.fontVariantNumeric) || /"tnum"/.test(s.fontFeatureSettings) });
+    }
+    // 5. 圖表顏色：SVG 圖表裡飽和的填色與線色
+    const hues = new Map();
+    for (const svg of qsa(B, 'svg')) {
+      const r = rectOf(svg); if (r.width < 120 || r.height < 60 || !isVisible(svg)) continue;
+      for (const sh of qsa(svg, 'path, rect, circle, line, polyline, polygon')) {
+        const ss = cs(sh);
+        for (const c of [ss.fill, ss.stroke]) {
+          if (!c || c === 'none' || c.startsWith('url')) continue;
+          const v = parseColor(c); if (!v || alphaOf(v) < 0.3) continue;
+          const mx = Math.max(v.r, v.g, v.b) / 255, mn = Math.min(v.r, v.g, v.b) / 255, l = (mx + mn) / 2, d = mx - mn;
+          const sat = d === 0 ? 0 : (l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn));
+          if (sat < 0.25 || l < 0.12 || l > 0.92) continue;
+          const k = Math.round(hue(v) / 24); hues.set(k, (hues.get(k) || 0) + 1);
+        }
+      }
+    }
+    // 6. 假資料
+    const placeholders = [...new Set((collapse(B.innerText).match(PLACEHOLDER_RE) || []).map(s => s.toLowerCase()))];
+    // 7. 字級種類
+    const sizes = new Map();
+    const walker = D.createTreeWalker(B, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const t = n.nodeValue.trim(); if (t.length < 2 || !n.parentElement || !isVisible(n.parentElement)) continue;
+      const sz = Math.round(num(cs(n.parentElement).fontSize)); sizes.set(sz, (sizes.get(sz) || 0) + t.length);
+    }
+    const h1 = qsa(B, 'h1, [role="heading"][aria-level="1"]').find(e => isVisible(e) && rectOf(e).width > 0) || null;
+    return {
+      Wd, phone, sidebar, canvas, panels, radii, heavyBorders, heavyShadows, ragged, voids,
+      cells, leftNums, figures, chartHues: hues.size, placeholders,
+      sizes: [...sizes.keys()].sort((a, b) => a - b),
+      title: h1 ? { el: h1, text: clip(collapse(h1.textContent), 40), size: Math.round(num(cs(h1).fontSize)) } : null,
+    };
+  }
+  const app = () => (選項.工具畫面 === false ? null : once('app', appMeasure));
+  const appRule = fn => () => { const A = app(); return A == null ? null : fn(A); };
+  const appRules = {
+    sidebarPhone: appRule(A => (A.phone && A.sidebar && A.sidebar.share > 0.3 ? [hit(A.sidebar.el, `${A.Wd}px 寬的手機上側欄還佔 ${Math.round(A.sidebar.share * 100)}%`)] : [])),
+    unusedCanvas: appRule(A => (!A.phone && A.Wd >= 1100 && A.canvas && A.canvas.right > Math.max(120, A.Wd * 0.1) && A.canvas.right > A.canvas.left + 80
+      ? [hit(D.body, `內容離右邊緣還有 ${A.canvas.right}px，左邊只離${A.sidebar ? '側欄' : '左緣'} ${A.canvas.left}px`)] : [])),
+    heavyShadow: appRule(A => A.heavyShadows.map(h => hit(h.el, `陰影重到像浮起來：${h.細節}`))),
+    heavyBorders: appRule(A => (A.heavyBorders.length >= 3 ? A.heavyBorders.map(h => hit(h.el, h.細節)) : [])),
+    radiusMix: appRule(A => { const r = [...A.radii.entries()].filter(([, n]) => n >= 2).map(([v]) => v).sort((a, b) => a - b); return r.length > 3 ? [hit(D.body, `面板用了 ${r.length} 種圓角（${r.join('、')}px）`)] : []; }),
+    numericAlign: appRule(A => (A.cells.length >= 6 && A.leftNums.length / A.cells.length >= 0.5 ? [hit(A.leftNums[0], `${A.cells.length} 個數字格有 ${A.leftNums.length} 個靠左`)] : [])),
+    tabular: appRule(A => { if (A.figures.length < 6) return []; const n = A.figures.filter(f => f.tabular).length; const bad = A.figures.find(f => !f.tabular); return n / A.figures.length < 0.5 ? [hit(bad.el, `${A.figures.length} 個數字只有 ${n} 個用等寬數字（tabular-nums）`)] : []; }),
+    rainbowChart: appRule(A => (A.chartHues > 6 ? [hit(D.body, `圖表用了 ${A.chartHues} 種色相`, 'error')] : A.chartHues > 4 ? [hit(D.body, `圖表用了 ${A.chartHues} 種色相`)] : [])),
+    placeholderData: appRule(A => (A.placeholders.length ? [hit(D.body, `畫面上有假資料：${A.placeholders.join('、')}`)] : [])),
+    raggedRow: appRule(A => (A.phone ? [] : A.ragged.slice(0, 6).map(r => hit(r.el, `同一列的卡片底邊差 ${r.diff}px`)))),
+    panelVoid: appRule(A => (A.phone || A.Wd < 1100 ? [] : A.voids.slice(0, 6).map(v => hit(v.el, `卡片裡有 ${v.gap}px 的空白帶`)))),
+    titleSize: appRule(A => (A.title && A.title.size > (A.phone ? 28 : 34) ? [hit(A.title.el, `h1 是 ${A.title.size}px（工具畫面 18〜32px，手機 20〜24px）`)] : [])),
+    kpiSize: appRule(A => { const big = A.figures.filter(f => f.size >= 48); return big.length ? [hit(big[0].el, `數字字級 ${Math.round(Math.max(...big.map(f => f.size)))}px（工具畫面 16〜40px）`)] : []; }),
+    sizeCount: appRule(A => (A.sizes.length > 10 ? [hit(D.body, `${A.sizes.length} 種字級（${A.sizes.join('、')}px）`)] : [])),
+    noTitle: appRule(A => (A.title ? [] : [hit(D.body, '畫面沒有 h1')])),
+  };
+
+  // ───────────────────────── 無障礙（新寫，清單參考 ui-ux-pro-max-skill 的 quick-reference.md） ─────────────────────────
+
+  // 只有圖示、讀不出名字的按鈕與連結。名字＝aria-labelledby／aria-label／title／alt／不在 aria-hidden 裡的字；
+  // 字裡沒有任何文字或數字（只有 ×、☰、⋯、箭頭、emoji）也算沒有名字。
+  function iconButtonName() {
+    const out = [];
+    const hasWord = s => /[\p{L}\p{N}]/u.test(s || '');
+    const nameText = el => {
+      let t = '';
+      const walk = n => {
+        if (n.nodeType === 3) { t += n.nodeValue; return; }
+        if (n.nodeType !== 1) return;
+        if (n.getAttribute('aria-hidden') === 'true') return;
+        if (n !== el && (n.getAttribute('aria-label') || '').trim()) { t += ' ' + n.getAttribute('aria-label'); return; }
+        const tg = tagOf(n);
+        if (tg === 'img' || (tg === 'input' && n.type === 'image')) { t += ' ' + (n.getAttribute('alt') || ''); return; }
+        if (tg === 'svg') { const ti = n.querySelector('title'); if (ti) t += ' ' + ti.textContent; return; }
+        if (tg === 'style' || tg === 'script') return;
+        for (const c of n.childNodes) walk(c);
+      };
+      walk(el);
+      return t;
+    };
+    for (const el of qsa(D.body, 'button, a[href], [role="button"], input[type="button"], input[type="submit"], input[type="reset"], input[type="image"]')) {
+      if (!isVisible(el) || closest(el, '[aria-hidden="true"]')) continue;
+      const r = rectOf(el); if (r.width < 1 || r.height < 1) continue;
+      const by = (el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map(id => (D.getElementById(id) || {}).textContent || '').join(' ');
+      if (hasWord(by) || hasWord(el.getAttribute('aria-label')) || hasWord(el.getAttribute('title'))) continue;
+      if (tagOf(el) === 'input' && (el.type === 'image' ? hasWord(el.getAttribute('alt')) : hasWord(el.value))) continue;
+      const t = nameText(el);
+      if (hasWord(t)) continue;
+      out.push(hit(el, t.trim() ? `按鈕只有符號「${clip(t.trim(), 8)}」，螢幕報讀器念不出它做什麼` : '按鈕沒有字也沒有 aria-label'));
+    }
+    return out;
+  }
+  // 有會動的轉場或動畫，卻整頁沒有 @media (prefers-reduced-motion)。
+  // 只有顏色、底色、框色、陰影、透明度的轉場不算「會動」。
+  function reducedMotion() {
+    const STILL = /^(color|background|background-color|border-color|border-[a-z]+-color|outline-color|box-shadow|opacity|fill|stroke|text-decoration-color|visibility|filter)$/;
+    let moving = null;
+    for (const el of elements()) {
+      const s = cs(el);
+      const durs = (s.transitionDuration || '').split(',').map(num), props = (s.transitionProperty || '').split(',').map(p => p.trim());
+      const tp = props.find((p, i) => (durs[i % durs.length] || 0) > 0 && p !== 'none' && !STILL.test(p));
+      if (tp) { moving = { el, 細節: `transition: ${tp}` }; break; }
+      const an = animNames(el);
+      if (an.length && (s.animationDuration || '').split(',').some(d => num(d) > 0)) { moving = { el, 細節: `animation: ${an[0]}` }; break; }
+    }
+    if (!moving) return [];
+    const mentions = t => /prefers-reduced-motion/i.test(t || '');
+    for (const sh of D.styleSheets) { try { if (mentions(sh.media && sh.media.mediaText)) return []; } catch { /* 略過 */ } }
+    for (const r of allRules()) { if ((r.type === 4 || r.type === 12) && mentions(r.conditionText || (r.media && r.media.mediaText))) return []; }
+    return [hit(moving.el, `${moving.細節}，整頁沒有 @media (prefers-reduced-motion) 可以關掉它`)];
+  }
+  // 鍵盤聚焦時看不出焦點：真的 focus() 一次，比較聚焦前後的外框、陰影、框色、底色。
+  // 只量「focus() 之後符合 :focus-visible」的元素（點過滑鼠之後瀏覽器不顯示焦點，量不到就不算）。
+  // 會打開選單的（combobox、aria-haspopup、input[list]）不碰；量完把焦點還回去。這條要排在最後跑。
+  function focusRing() {
+    if (選項.不移動焦點) return null;
+    const out = [], seenSig = new Set();
+    let measured = 0;
+    const prev = D.activeElement;
+    const snap = el => { const s = W.getComputedStyle(el); return { os: s.outlineStyle, ow: num(s.outlineWidth), oc: s.outlineColor, bs: s.boxShadow, bc: s.borderTopColor + s.borderBottomColor, bg: s.backgroundColor, td: s.textDecorationLine, col: s.color }; };
+    const cands = qsa(D.body, 'a[href], button, input:not([type="hidden"]), select, textarea, summary, [role="button"], [tabindex]:not([tabindex="-1"])')
+      .filter(el => isVisible(el) && !el.disabled && !closest(el, '[inert], [aria-hidden="true"]') && !matches(el, '[role="combobox"], [aria-haspopup]:not([aria-haspopup="false"]), input[list]'))
+      .slice(0, 80);
+    try {
+      for (const el of cands) {
+        const sig = tagOf(el) + '.' + classStr(el).trim().split(/\s+/).sort().join('.') + (el.type ? ':' + el.type : '');
+        if (seenSig.has(sig)) continue;
+        const before = snap(el);
+        try { el.focus({ preventScroll: true }); } catch { continue; }
+        if (D.activeElement !== el) continue;
+        if (!matches(el, ':focus-visible')) { el.blur(); continue; }
+        seenSig.add(sig); measured++;
+        const a = snap(el);
+        el.blur();
+        const oc = parseColor(a.oc);
+        const outline = a.os !== 'none' && (a.os === 'auto' || a.ow > 0) && !(oc && alphaOf(oc) === 0);
+        const changed = (a.bs !== before.bs && a.bs !== 'none') || a.bc !== before.bc || a.bg !== before.bg || a.td !== before.td || a.col !== before.col;
+        if (!outline && !changed) out.push(hit(el, `聚焦時外框是 ${a.os}／${a.ow}px，陰影、框色、底色也都沒變`));
+        if (out.length >= 8) break;
+      }
+    } finally {
+      try { if (prev && prev !== D.body && prev.focus) prev.focus({ preventScroll: true }); else if (D.activeElement && D.activeElement.blur) D.activeElement.blur(); } catch { /* 還不回去就算了 */ }
+    }
+    return measured || !cands.length ? out : null;
+  }
 
   function designSystem() {
     const ds = 選項.設計系統;
@@ -2021,11 +2385,11 @@
   }
   const dsRule = id => () => { const r = once('designSystem', designSystem); return r == null ? null : r.filter(h => h.id === id).map(h => hit(h.el, h.細節)); };
 
-  // ───────────────────────── 61 條規則 ─────────────────────────
+  // ───────────────────────── 規則（impeccable 61 條＋工具畫面 15 條＋無障礙 3 條） ─────────────────────────
   // 類別：原作 category 是 slop → 「品味類」；quality → 「可讀性／破版類」
   // 嚴重度：原作 error → error；預設 warning → warn；advisory → info
 
-  const 品味 = '品味類', 可讀 = '可讀性／破版類';
+  const 品味 = '品味類', 可讀 = '可讀性／破版類', 工具 = '工具畫面類', 無障礙 = '無障礙類';
   const 規則 = [
     { id: 'side-tab', 類別: 品味, 嚴重度: 'warn', 說明: '卡片單邊的粗彩色邊框（含偽元素、條紋子元素、inset 陰影畫的），最典型的 AI 生成介面特徵', 檢查函式: () => byId('borders', borderPass, 'side-tab') },
     { id: 'border-accent-on-rounded', 類別: 品味, 嚴重度: 'warn', 說明: '圓角卡片的上／下緣加粗強調邊框，和圓角互相打架', 檢查函式: () => byId('borders', borderPass, 'border-accent-on-rounded') },
@@ -2077,6 +2441,7 @@
     { id: 'all-caps-body', 類別: 可讀, 嚴重度: 'warn', 說明: '長段內文全大寫', 檢查函式: () => byId('quality', qualityPass, 'all-caps-body') },
     { id: 'wide-tracking', 類別: 可讀, 嚴重度: 'warn', 說明: '內文字距大於 0.05em', 檢查函式: () => byId('quality', qualityPass, 'wide-tracking') },
     { id: 'text-overflow', 類別: 可讀, 嚴重度: 'warn', 說明: '內容比容器寬、溢出去或撐出橫向捲軸', 檢查函式: textOverflow },
+    { id: 'text-clipped', 類別: 可讀, 嚴重度: 'warn', 說明: '欄位裝不下字：輸入框的值、表格格子、裁切框裡的字被切掉（差 2px 就算）', 檢查函式: textClipped },
     { id: 'repeated-container-text', 類別: 可讀, 嚴重度: 'warn', 說明: '同一張卡片裡同一段字在三個不同位置重複出現', 檢查函式: repeatedContainerText },
     { id: 'clipped-overflow-container', 類別: 可讀, 嚴重度: 'warn', 說明: 'overflow:hidden 容器把需要溢出的定位子元素（選單、提示）裁掉', 檢查函式: clippedOverflow },
     { id: 'design-system-font', 類別: 可讀, 嚴重度: 'warn', 說明: '用了 DESIGN.md 沒宣告的字型（需提供設計系統選項）', 檢查函式: dsRule('design-system-font') },
@@ -2088,6 +2453,26 @@
     { id: 'codex-grid-background', 類別: 品味, 嚴重度: 'info', 說明: '用細線漸層鋪成的裝飾格線背景', 檢查函式: gridBackground },
     { id: 'theater-slop-phrase', 類別: 品味, 嚴重度: 'info', 說明: '把東西貶成「X theater」的生成文案口頭禪', 檢查函式: theater },
     { id: 'image-hover-transform', 類別: 品味, 嚴重度: 'info', 說明: '滑過圖片就放大或旋轉', 檢查函式: imageHoverTransform },
+    // 工具畫面類（taste-skill 的 app 量測）：選項 工具畫面: false 時不跑
+    { id: 'app-sidebar-phone', 類別: 工具, 嚴重度: 'error', 說明: '手機寬度下側欄還佔超過 30% 的寬度', 檢查函式: appRules.sidebarPhone },
+    { id: 'app-unused-canvas', 類別: 工具, 嚴重度: 'warn', 說明: '寬螢幕上內容只用到左半邊，右邊留一條死白', 檢查函式: appRules.unusedCanvas },
+    { id: 'app-heavy-shadow', 類別: 工具, 嚴重度: 'error', 說明: '面板的陰影重到像浮起來（選單、對話框不算）', 檢查函式: appRules.heavyShadow },
+    { id: 'app-heavy-borders', 類別: 工具, 嚴重度: 'warn', 說明: '三個以上面板的框線太深，畫面變成一格格的箱子', 檢查函式: appRules.heavyBorders },
+    { id: 'app-radius-mix', 類別: 工具, 嚴重度: 'warn', 說明: '面板用了四種以上的圓角', 檢查函式: appRules.radiusMix },
+    { id: 'app-numeric-align', 類別: 工具, 嚴重度: 'warn', 說明: '表格裡的數字（金額、筆數、百分比）一半以上靠左，位數對不齊', 檢查函式: appRules.numericAlign },
+    { id: 'app-tabular', 類別: 工具, 嚴重度: 'warn', 說明: '畫面上的數字不到一半用等寬數字（tabular-nums）', 檢查函式: appRules.tabular },
+    { id: 'app-rainbow-chart', 類別: 工具, 嚴重度: 'warn', 說明: '圖表超過四種色相（超過六種升為 error）', 檢查函式: appRules.rainbowChart },
+    { id: 'app-placeholder-data', 類別: 工具, 嚴重度: 'error', 說明: '畫面上有假資料（John Doe、王小明、張三、某某公司、0912-345-678…）', 檢查函式: appRules.placeholderData },
+    { id: 'app-ragged-row', 類別: 工具, 嚴重度: 'warn', 說明: '同一列的卡片底邊不齊（手機寬度不算）', 檢查函式: appRules.raggedRow },
+    { id: 'app-panel-void', 類別: 工具, 嚴重度: 'warn', 說明: '卡片被拉高、裡面留一大條空白（寬 1100px 以上才量）', 檢查函式: appRules.panelVoid },
+    { id: 'app-title-size', 類別: 工具, 嚴重度: 'warn', 說明: '工具畫面的 h1 超過 34px（手機 28px），像行銷頁', 檢查函式: appRules.titleSize },
+    { id: 'app-kpi-size', 類別: 工具, 嚴重度: 'warn', 說明: '數字用到 48px 以上的展示級字級', 檢查函式: appRules.kpiSize },
+    { id: 'app-size-count', 類別: 工具, 嚴重度: 'warn', 說明: '畫面上超過 10 種字級', 檢查函式: appRules.sizeCount },
+    { id: 'app-no-title', 類別: 工具, 嚴重度: 'error', 說明: '畫面沒有 h1，不知道這頁是什麼', 檢查函式: appRules.noTitle },
+    // 無障礙類（新寫）
+    { id: 'a11y-icon-button-name', 類別: 無障礙, 嚴重度: 'error', 說明: '只有圖示或符號的按鈕／連結沒有名字（aria-label、title、隱藏文字都沒有）', 檢查函式: iconButtonName },
+    { id: 'a11y-reduced-motion', 類別: 無障礙, 嚴重度: 'error', 說明: '有會動的轉場或動畫，卻沒有 @media (prefers-reduced-motion)', 檢查函式: reducedMotion },
+    { id: 'a11y-focus-ring', 類別: 無障礙, 嚴重度: 'error', 說明: '鍵盤聚焦時看不出焦點（外框拿掉、也沒有陰影或框色替代）', 檢查函式: focusRing },
   ];
 
   if (選項.只列規則) {
@@ -2102,10 +2487,10 @@
   for (const r of 規則) {
     let res;
     try { res = r.檢查函式(); } catch (e) { 錯誤.push({ id: r.id, 訊息: String(e && e.stack || e).slice(0, 300) }); continue; }
-    if (res == null) { 略過.push({ id: r.id, 原因: r.id === 'script-error' ? '頁面上沒有錯誤收集器（見 design-rules.md）' : '沒有提供 設計系統 選項' }); continue; }
+    if (res == null) { 略過.push({ id: r.id, 原因: r.id === 'script-error' ? '頁面上沒有錯誤收集器（見 design-rules.md）' : r.類別 === 工具 ? '選項 工具畫面 是 false' : r.id === 'a11y-focus-ring' ? (選項.不移動焦點 ? '選項 不移動焦點 是 true' : '沒有一個元素在 focus() 之後符合 :focus-visible（多半是剛點過滑鼠），量不到' ) : '沒有提供 設計系統 選項' }); continue; }
     for (const h of res) {
       const el = h.el || D.body;
-      if (el !== D.body && ignored(el, r.id)) continue;
+      if (ignored(el, r.id)) continue; // body 上的命中看 body／html 的屬性
       const 描述 = describe(el);
       const key = r.id + '|' + 描述 + '|' + h.細節;
       if (seenKey.has(key)) continue;

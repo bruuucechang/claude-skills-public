@@ -54,16 +54,17 @@ const D = await import('./dispatch.mjs');
 // ── 路由 ──
 {
   const names = (ev, tool) => D.checksFor(ev, { tool_name: tool }).map((c) => c.name).join(',');
-  ok('Bash 走六支', names('PreToolUse', 'Bash') === 'git-author-guard,commit-message-guard,pushq-guard,pr-guard,focus-guard,kill-guard');
+  ok('Bash 走八支', names('PreToolUse', 'Bash') === 'git-author-guard,commit-message-guard,pushq-guard,pr-guard,focus-guard,kill-guard,git-wipe-guard,wait-guard');
   ok('Stop 有英文收尾檢查、排在 ask-with-options 後面', names('Stop').startsWith('ask-with-options,lang-guard,'));
+  ok('Stop 與選項框都有簡體／冷僻字檢查', names('Stop').startsWith('ask-with-options,lang-guard,zh-guard,') && names('PreToolUse', 'AskUserQuestion').endsWith(',zh-guard'));
   ok('Read 什麼都不跑', names('PreToolUse', 'Read') === '');
   ok('browser_batch 走白名單', names('PreToolUse', 'mcp__claude-in-chrome__browser_batch') === 'browser-batch-guard');
   ok('Agent 走模型檢查', names('PreToolUse', 'Agent') === 'agent-model-guard');
   ok('不認得的事件什麼都不跑', names('Nope') === '');
   const cx = (ev, tool) => D.checksFor(ev, { tool_name: tool }, D.CODEX_ROUTES).map((c) => c.name).join(',');
   ok('Codex：SessionStart 只跑不吃 transcript 的三支', cx('SessionStart') === 'session-start-context,blocks-current,update-check');
-  ok('Codex：PreToolUse 不看 tool_name（matcher 已篩過）', cx('PreToolUse', 'Bash') === 'git-author-guard,commit-message-guard,pushq-guard,pr-guard,focus-guard,kill-guard' && cx('PreToolUse', 'shell') === cx('PreToolUse', 'Bash'));
-  ok('Codex：Stop 只跑 ask-with-options（lang-guard 不搬）、沒有 UserPromptSubmit', cx('Stop') === 'ask-with-options' && cx('UserPromptSubmit') === '');
+  ok('Codex：PreToolUse 不看 tool_name（matcher 已篩過）', cx('PreToolUse', 'Bash') === 'git-author-guard,commit-message-guard,pushq-guard,pr-guard,focus-guard,kill-guard,git-wipe-guard' && cx('PreToolUse', 'shell') === cx('PreToolUse', 'Bash'));
+  ok('Codex：Stop 只跑 ask-with-options（lang-guard、zh-guard 不搬）、沒有 UserPromptSubmit', cx('Stop') === 'ask-with-options' && cx('UserPromptSubmit') === '');
   const cj = JSON.parse(readFileSync(join(HERE, 'codex-hooks.json'), 'utf8'));
   const cmds = Object.entries(cj.hooks).flatMap(([ev, gs]) => gs.flatMap((g) => g.hooks.map((h) => [ev, h.command])));
   ok('codex-hooks.json 每個事件都是一條 dispatch.mjs <同名事件> codex',
@@ -98,6 +99,8 @@ const D = await import('./dispatch.mjs');
   ok('沒帶事件參數時看 hook_event_name；batch 夾 resize_window 擋', deny(u.json) && reason(u.json).includes('resize_window'));
   const a = sh('dispatch.mjs', ['PreToolUse'], { tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: '你跑好了沒？', options: [{ label: '好' }] }] } });
   ok('AskUserQuestion 問「做了沒」擋', deny(a.json));
+  const pv = sh('dispatch.mjs', ['PreToolUse'], { tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: '選哪個？', options: [{ label: 'A', preview: Array(12).fill('x').join('\n') }] }] } });
+  ok('AskUserQuestion preview 超過 8 行擋', deny(pv.json) && /8 行/.test(pv.json.hookSpecificOutput.permissionDecisionReason));
   const c = sh('dispatch.mjs', ['PreToolUse', 'codex'], { hook_event_name: 'PreToolUse', tool_name: 'Bash', cwd: T, tool_input: { command: `${GC} -m x` } });
   ok('Codex 模式：commit -m 一樣擋', deny(c.json) && reason(c.json).includes("-F - <<'MSG'"), c.out.slice(0, 200));
   const cs = sh('dispatch.mjs', ['SessionStart', 'codex'], { hook_event_name: 'SessionStart', cwd: T, source: 'startup' });

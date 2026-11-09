@@ -60,7 +60,7 @@ const godotVars = (text) => {
   const vars = new Map([['GODOT', '']]);
   for (const m of text.matchAll(/(?:^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|'([^']*)'|([^\s;&|]*))/g)) {
     const val = m[2] ?? m[3] ?? m[4] ?? '';
-    if (/^\S*Godot(\s|$)/.test(val)) vars.set(m[1], val);
+    if (/^\S*[Gg]odot(\s|$)/.test(val)) vars.set(m[1], val);
   }
   return vars;
 };
@@ -88,7 +88,7 @@ export function run(input) {
   if (existsSync(OFF)) return null;
   const cmd = input?.tool_input?.command ?? '';
   if (typeof cmd !== 'string') return null;
-  if (!/open|osascript|Godot/.test(cmd)) return null;
+  if (!/open|osascript|[Gg]odot/.test(cmd)) return null;
 
   const segs = maskQuoted(stripHeredocs(cmd)).split(/&&|\|\||[;|\n]/).map(head);
   const gvars = godotVars(stripHeredocs(cmd));
@@ -107,7 +107,8 @@ export function run(input) {
       }
     }
     const v = s.match(viaVar);
-    if (/(^|\/)Godot(\s|$)/.test(s.split(/\s+/)[0] ?? '') || /^"[^"]*\/Godot"(\s|$)/.test(s) || v) {
+    // 小寫 godot 是 Homebrew 的 symlink（/opt/homebrew/bin/godot → Godot.app），一樣會開視窗（2026-10-22）
+    if (/(^|\/)[Gg]odot(\s|$)/.test(s.split(/\s+/)[0] ?? '') || /^"[^"]*\/[Gg]odot"(\s|$)/.test(s) || v) {
       if (!NO_WINDOW.test(`${s} ${v ? gvars.get(v[1]) : ''}`)) problems.push('直接跑有視窗的 Godot：它啟動時會搶焦點');
     }
   }

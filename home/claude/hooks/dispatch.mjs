@@ -48,12 +48,12 @@ export const ROUTES = {
   SessionStart: ['session-start-context', 'session-restore', 'blocks-current', 'update-check',
     ['account-check', 8000], 'session-title'],
   UserPromptSubmit: ['context-tier', 'account-drain', 'session-title'],
-  Stop: ['ask-with-options', 'lang-guard', 'account-drain', 'session-journal'],
+  Stop: ['ask-with-options', 'lang-guard', 'zh-guard', 'account-drain', 'session-journal'],
   // 輸出被 Claude Code 忽略，只做副作用（撞額度上限換帳號，W5）。裡面是同步的 execFileSync，逾時靠它自己的 timeout（7＋3 秒）
   StopFailure: [['rate-limit-switch', 11000]],
   PreToolUse: {
-    Bash: ['git-author-guard', 'commit-message-guard', 'pushq-guard', 'pr-guard', 'focus-guard', 'kill-guard'],
-    AskUserQuestion: ['ask-hides-prose'],
+    Bash: ['git-author-guard', 'commit-message-guard', 'pushq-guard', 'pr-guard', 'focus-guard', 'kill-guard', 'git-wipe-guard', 'wait-guard'],
+    AskUserQuestion: ['ask-hides-prose', 'ask-preview-length', 'zh-guard'],
     Agent: ['agent-model-guard'],
     Task: ['agent-model-guard'],   // 舊版 Claude Code 的同一個工具
     'mcp__claude-in-chrome__browser_batch': ['browser-batch-guard'],
@@ -63,7 +63,7 @@ export const ROUTES = {
 /** Codex 那邊掛的（2026-10-20 H5 以前是逐支直接呼叫，清單照搬）。matcher 已經在 hooks.json 篩過 Bash，這裡不再看 tool_name。 */
 export const CODEX_ROUTES = {
   SessionStart: ['session-start-context', 'blocks-current', 'update-check'],
-  PreToolUse: ['git-author-guard', 'commit-message-guard', 'pushq-guard', 'pr-guard', 'focus-guard', 'kill-guard'],
+  PreToolUse: ['git-author-guard', 'commit-message-guard', 'pushq-guard', 'pr-guard', 'focus-guard', 'kill-guard', 'git-wipe-guard'],
   Stop: ['ask-with-options'],
 };
 

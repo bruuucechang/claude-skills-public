@@ -40,6 +40,23 @@ $R/.venv/bin/python $R/scripts/generate_sprite_image.py --provider codex \
   而且工作單要規定：**最後只輸出一張對照表**（全部成品排在一張 PNG，標上檔名），
   中途不要一張一張讀圖檢查；我只看那一張驗收。量到的：一天 228 次讀圖，context 漲到 57%。
 
+## 依工作強度選模型（2026-10-27 裁示：品質為主）
+
+寫工作單時由我判級，`cx start <目錄> <級>` 帶進去（不寫＝session 活著就沿用、新開用一般）。級寫死在 `cx.py` 的 `TIERS`：
+
+| 級 | 模型 | 什麼工作 |
+|---|---|---|
+| 雜事 | `gpt-6.1-terra` medium | 改名、格式、文件、交接摘要、轉換 |
+| 一般 | `gpt-6-astra` medium | 單一功能、有重現步驟的 bug |
+| 難題 | `gpt-6-astra` xhigh | 跨模組、架構、沒頭緒的除錯 |
+
+- 判不準就往上判一級（品質為主）。
+- **退回第 1 次就 `cx up <名>` 升一級**再送退回單：換模型、接續同一個對話（`codex resume <id> -m …`，2026-10-27 實測前文記得）。
+  已經是難題就不再升。第 2 次退回不再升。
+- 同專案下一件工作的級不同，直接 `cx start <目錄> <新級>`：session 還活著就接續原對話；
+  已經結束（閒置 2 小時被收、或崩潰）就是開新對話，照第 7 步讀交接摘要。回合進行中換級會被拒絕，先 `wait`。
+- 產圖走 `codex exec` 的那條路不吃這張表。Terra 要 CLI ≥ 0.159（Mac 的 `~/.local/bin/codex` 已改指 brew 版）。
+
 ## 流程（一次做到完，中間不回頭問使用者）
 
 1. **寫工作單**到 scratchpad 的 `.md`：目標、絕對路徑、**可執行的驗收指令**、明確不做什麼、
@@ -51,7 +68,7 @@ $R/.venv/bin/python $R/scripts/generate_sprite_image.py --provider codex \
    所以工作單一律附上這段固定規則：繁體中文；不開會搶畫面的視窗或瀏覽器分頁（要看畫面用 `dev-browser --headless`）；
    不 commit、不 push、不開 PR（改動留在工作區，我驗收後用 `/ship` 走 PR；Codex 的 commit 留在共用 checkout 會被別人直推帶出去，2026-10-20）；不碰工作單沒點名的檔與專案 `CLAUDE.md` 的不准重構區；
    不跑會對外請求或花錢的指令（工作單明列的除外）。
-2. `cx start <專案目錄>` → 印出 session 名（`codex-<目錄名>`）。同專案再叫一次會接續同一個對話。
+2. `cx start <專案目錄> <級>` → 印出 session 名（`codex-<目錄名>`）。同專案再叫一次會接續同一個對話。
    第一次進某個目錄 Codex 會問「Trust this folder?」：是使用者自己的專案就 `cx keys <名> Enter`；
    不是他的 repo（見 [[only-my-own-repos]]）就先用選項問。按了信任會永久寫進 `~/.codex/config.toml`；
    暫存目錄用完 `cx kill` 後把那條 `[projects."<目錄>"]` 刪掉（2026-10 累積過 141 條失效紀錄，見 hooks 規格附錄 J／K）。
@@ -65,11 +82,11 @@ $R/.venv/bin/python $R/scripts/generate_sprite_image.py --provider codex \
    - 印出 `!! 錯誤：…usage limit…` → 額度用完，**直接告訴使用者重置時間，不要重試**
 5. **驗收**：自己跑驗收指令、`git diff` 看它改了什麼、前端改動照全域規則實際渲染看。
    對照 AGENTS.md：有沒有做一半、有沒有沒驗證就說完成、有沒有改範圍外的檔。
-6. 不合格 → 寫一份「哪裡不對、具體證據、要它怎麼修」的退回單再 `send`＋`wait`。
+6. 不合格 → 寫一份「哪裡不對、具體證據、要它怎麼修」的退回單再 `send`＋`wait`；第 1 次退回前先 `cx up <名>`。
    **最多退回 2 次**；第 3 次還不合格就停下，用 `AskUserQuestion` 問使用者（例：我自己修／再給 Codex 一次／先擱著）。
 7. 合格 → 看 `wait` 印的 context %。**≥ 50%**：送「寫一份交接摘要到 `<專案>/scratchpad/codex-handoff.md`
    （目前狀態、決定過的事、還沒做的事）」→ `wait` → `cx kill <名>`；下次 `start` 時工作單第一行叫它先讀那份摘要。
-8. **回報**：用繁體、照使用者的格式重寫，不要貼 Codex 原文。要寫：做了什麼、驗收指令與結果、
+8. **回報**：用繁體、照使用者的格式重寫，不要貼 Codex 原文。要寫：做了什麼、用了哪一級（有沒有升級）、驗收指令與結果、
    退回過幾次與原因、context %、我做了哪些假設。回報附上 `tmux attach -t <名>` 讓他想看時自己看（tmux 留著，閒置 2 小時自動結束）。
 
 ## 硬規則

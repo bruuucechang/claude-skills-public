@@ -207,6 +207,12 @@ for (const [cmd, label] of cases) { const w = repo('octocat'); commit(w, 'a.py')
   check(PASS, 'pushq bypassEnv：heredoc 裡寫到 PUSHQ_BYPASS 不算', /PUSHQ_BYPASS=/.test(stripData(`cat > n.md <<'EOF'\nPUSHQ_BYPASS=1\nEOF`))); }
 { const w = repo('someoneelse'); check(PASS, 'PreToolUse：別人的 repo', denied('git push --no-verify', w)); }
 { const w = repo('octocat');
+  execFileSync('git', ['config', '--file', GLOBAL, 'hook.pr-guard.command', ONELINER('/nonexistent/pr-prepush.mjs')]);
+  check(BLOCK, 'PreToolUse：全域 hook 有設、但 f= 指的檔不在（clone 切了分支）', denied('git push origin master', w));
+  execFileSync('git', ['config', '--file', GLOBAL, 'hook.pr-guard.command', ONELINER(root)]);
+  check(BLOCK, 'PreToolUse：f= 指的是目錄（殼層的 [ -f ] 不成立）', denied('git push origin master', w));
+  execFileSync('git', ['config', '--file', GLOBAL, 'hook.pr-guard.command', ONELINER(PREPUSH)]);
+  check(PASS, 'PreToolUse：全域 hook 有設、檔也在', denied('git push origin master', w));
   writeFileSync(GLOBAL, '');   // 還沒跑 bootstrap
   check(BLOCK, 'PreToolUse：這台還沒裝全域 pre-push', denied('git push origin master', w)); }
 

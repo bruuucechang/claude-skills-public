@@ -1,0 +1,4 @@
+/* 正例：色碼都在 token 檔或 :root／[data-theme] 區塊裡 */
+:root { --accent: #1a5fb4; --ground: light-dark(#f7f7f7, #111111); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --accent: #78aeed; } }
+:root[data-theme="dark"] { --accent: #78aeed; }

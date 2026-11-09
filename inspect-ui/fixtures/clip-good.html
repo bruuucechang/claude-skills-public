@@ -1,0 +1,47 @@
+<!doctype html>
+<!-- 正例（U13）：text-clipped 一筆都不准報。值放得下的輸入框、不是文字的輸入框、刻意的省略號、
+     會換行的格子、可捲區域裡超出的格子、螢幕閱讀器專用字、差 16px 以上交給 text-overflow 的溢出、
+     日期欄位的 placeholder 屬性（不會顯示）、裁切框裡超出去的裝飾（偽元素、定位的圓、寬圖），字本身沒被切 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>欄位放得下字</title>
+<style>
+  body { margin: 0; padding: 24px; font: 16px/1.5 ui-monospace, Menlo, monospace; background: #fff; color: #222; }
+  input { font: inherit; padding: 2px 4px; border: 1px solid #888; }
+  .wide { width: 320px; }
+  .ell { width: 80px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  table { border-collapse: collapse; }
+  td { border: 1px solid #ccc; }
+  .wrap td { width: 100px; }
+  .scroller { width: 120px; overflow-x: auto; }
+  .scroller td { display: block; width: 100px; white-space: nowrap; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .spill { width: 60px; white-space: nowrap; }
+  .shine { position: relative; overflow: hidden; padding: 4px 12px; }
+  .shine::after { content: ""; position: absolute; top: 0; left: 0; width: 200px; height: 100%; background: rgb(255 255 255 / 0.3); }
+  .card { position: relative; overflow: hidden; width: 200px; padding: 8px; border: 1px solid #ccc; }
+  .card .blob { position: absolute; top: 0; right: -40px; width: 80px; height: 80px; border-radius: 50%; background: #e8f4f8; }
+  .avatars { width: 120px; overflow: hidden; white-space: nowrap; }
+  .avatars img { width: 200px; height: 20px; vertical-align: middle; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>欄位放得下字</h1>
+    <p><input class="wide" type="text" aria-label="帳號" value="台新銀行 0123-4567-8901" /></p>
+    <p><input class="wide" type="date" aria-label="日期" value="2026-10-23" /></p>
+    <p><input type="checkbox" aria-label="勾選" /> <input type="range" aria-label="音量" style="width:40px" /></p>
+    <div class="ell">很長很長的檔名一定放不下.pdf</div>
+    <table class="wrap"><tbody><tr><td>這一格的字很長但是會自己換行不會被切</td></tr></tbody></table>
+    <div class="scroller"><table><tbody><tr><td>ABCDEFGHIJKLMNOP</td></tr></tbody></table></div>
+    <button type="button">刪除<span class="sr-only">這一筆借款紀錄（2026-10-23）</span></button>
+    <p><input type="date" style="width:160px" aria-label="日期二" placeholder="選一天選一天選一天選一天" /></p>
+    <p><button class="shine" type="button">儲存</button></p>
+    <div class="card">設定<span class="blob"></span></div>
+    <div class="avatars">阿明<img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" /></div>
+    <div class="spill">這一段字超出容器很多很多</div>
+  </main>
+</body>
+</html>

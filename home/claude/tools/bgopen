@@ -34,6 +34,82 @@ end run
 AS
 }
 
+# 這個 session 是哪個帳號的 Chrome profile（2026-10-28 使用者：「peter 帳號就該開在 peter 的分頁 bruce 也是」）。
+# 照 CLAUDE_CONFIG_DIR 對帳號清單的 config_dir；對不到就空字串，走舊的「最前面的視窗」。
+acct_profile() {
+  python3 - "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" <<'PY2' 2>/dev/null || true
+import json,os,subprocess,sys
+d=os.path.realpath(os.path.expanduser(sys.argv[1]))
+host=subprocess.run(["scutil","--get","LocalHostName"],capture_output=True,text=True).stdout.strip()
+f=os.path.expanduser(f"~/.claude/skills/home/claude/accounts/{host}.json")
+for a in json.load(open(f))["accounts"]:
+    if os.path.realpath(os.path.expanduser(a["config_dir"]))==d: print(a.get("chrome_profile",""))
+PY2
+}
+
+# 開在指定 profile 的視窗、但不搶畫面：同網址的分頁原地 reload；沒有就叫 Chrome 本體帶 --profile-directory 開
+# （轉給正在跑的 Chrome，新分頁落在那個 profile 最近的視窗，2026-10-28 實測），再把作用中分頁與最前面的視窗換回去。
+chrome_profile_bg() {  # $1 = 網址、$2 = profile 目錄名
+  local before
+  before=$(osascript - "$1" <<'AS'
+on run argv
+  set u to item 1 of argv
+  tell application "Google Chrome"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if URL of t is u then
+          tell t to reload
+          return "reloaded"
+        end if
+      end repeat
+    end repeat
+    set out to ""
+    repeat with w in windows
+      set out to out & (id of w) & ":" & (active tab index of w) & ","
+    end repeat
+    return out
+  end tell
+end run
+AS
+) || return 1
+  [ "$before" = reloaded ] && return 0
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --profile-directory="$2" "$1" >/dev/null 2>&1 &
+  osascript - "$1" "$before" <<'AS' >/dev/null
+on run argv
+  set u to item 1 of argv
+  set snap to item 2 of argv
+  set AppleScript's text item delimiters to ","
+  set pairs to text items of snap
+  set AppleScript's text item delimiters to ":"
+  set frontId to (text item 1 of (item 1 of pairs)) as integer
+  tell application "Google Chrome"
+    repeat 100 times  -- 轉給正在跑的 Chrome 要好幾秒（2026-10-28 實測超過 3 秒）
+      -- 用 id 指視窗：新分頁一出來視窗順序就變，用「第幾個」會指錯（2026-10-28 撞過 Invalid index）
+      set ids to id of every window
+      repeat with k from 1 to count of ids
+        set wid to item k of ids
+        set w to window id wid
+        if (count of (tabs of w whose URL starts with u)) > 0 then
+          repeat with p in pairs
+            if p as text is not "" then
+              if ((text item 1 of (p as text)) as integer) is (wid as integer) then set active tab index of w to ((text item 2 of (p as text)) as integer)
+            end if
+          end repeat
+          set index of window id frontId to 1
+          -- Chrome 會在分頁出現之後才把那個視窗拉到最前面：多等一下、再換回去一次
+          delay 0.6
+          set index of window id frontId to 1
+          return
+        end if
+      end repeat
+      delay 0.1
+    end repeat
+  end tell
+end run
+AS
+}
+
+PROFILE=$(acct_profile)
 for x in "$@"; do
   case "$x" in
     http://*|https://*|file://*) url="$x" ;;
@@ -43,5 +119,7 @@ for x in "$@"; do
     *) open -g "$x"; continue ;;
   esac
   # Chrome 沒在跑就不要替他把 Chrome 叫起來搶畫面——退回系統預設的背景開啟。
-  if pgrep -xq "Google Chrome" && chrome_bg "$url" 2>/dev/null; then :; else open -g "$url"; fi
+  if ! pgrep -xq "Google Chrome"; then open -g "$url"
+  elif [ -n "$PROFILE" ] && [[ "$url" == http* ]]; then chrome_profile_bg "$url" "$PROFILE" || open -g "$url"
+  elif chrome_bg "$url" 2>/dev/null; then :; else open -g "$url"; fi
 done
