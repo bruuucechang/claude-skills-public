@@ -5,8 +5,7 @@ description: 除錯流程：東西壞了、報錯、測試紅、結果不對、�
 
 # 除錯：先有會紅的指令，才准提假設
 
-> 改寫自 Matt Pocock 的 `diagnosing-bugs` 與 obra/superpowers 的 `systematic-debugging`（2026-10-23 搬，研究摘要在
-> `home/claude/docs/2026-10-23-borrowed-skills/research.md`）。沒有整支照搬：跟這裡「開工後不回頭問」衝突的地方改掉了。
+> 改寫自 Matt Pocock 的 `diagnosing-bugs` 與 obra/superpowers 的 `systematic-debugging`。沒有整支照搬：跟這裡「開工後不回頭問」衝突的地方改掉了。
 
 **最常見的失敗是讀程式讀出一個理論，就照理論改。** 理論可能是對的，但沒有一條會紅的指令，
 改完也證明不了修好了——「看起來對了」跟原則 1「沉默不等於成功」是同一個坑。

@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 #
-# install.sh — 把這套 skills、全域規則與 hooks 裝進 ~/.claude（macOS、Linux）。
+# install.sh — 把這套 skills 裝進 ~/.claude（macOS、Linux）。預設只裝 skills，不動你的規則與設定。
 #
 #   git clone https://github.com/bruuucechang/claude-skills-public.git ~/claude-skills
-#   bash ~/claude-skills/install.sh                       # 互動式問帳號、email、語言
-#   bash ~/claude-skills/install.sh --owner octocat --email me@example.com --lang none --yes
+#   bash ~/claude-skills/install.sh                  # 只裝 skills
+#   bash ~/claude-skills/install.sh --with-hooks     # 加裝 hooks（會問 GitHub 帳號與 email）
+#   bash ~/claude-skills/install.sh --with-rules     # 加裝作者的全域規則（你原本的先備份）
+#   bash ~/claude-skills/install.sh --full --owner octocat --email me@example.com --lang none --yes
 #   bash ~/claude-skills/install.sh --uninstall
 #
 # 做的事（重跑是安全的，已經做過的會跳過）：
-#   1. 寫 home/claude/config.json（hooks 從這裡讀你的帳號、git 身分、語言）
-#   2. 每個 skill 目錄 symlink 進 ~/.claude/skills/<名字>（repo 本身就在那裡時跳過）
-#   3. AGENTS.md、CLAUDE.md、rules、commands symlink 進 ~/.claude；原本有的先備份成 *.bak-<時間>
-#   4. 把 settings.example.json 的 hooks 合併進 ~/.claude/settings.json（先備份；同一條指令不重複加）
+#   一律：每個 skill 目錄 symlink 進 ~/.claude/skills/<名字>，home 也連進去（recon、ship 要用裡面的工具）
+#   --with-hooks：寫 home/claude/config.json、把 hooks 合併進 ~/.claude/settings.json（先備份）、裝全域 pre-push
+#   --with-rules：AGENTS.md、CLAUDE.md、rules、commands symlink 進 ~/.claude；原本有的先備份成 *.bak-<時間>
 #
-# 這是公開版的安裝腳本（2026-10-21，規格 public-generic-spec.md）。私人版自己的機器用 bootstrap.sh。
+# 裝完開一個新的 claude session 才會生效。
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,24 +27,34 @@ y() { printf '  \033[33m!\033[0m %s\n' "$1"; }
 d() { printf '  \033[2m·\033[0m %s\n' "$1"; }
 die() { printf '\n  \033[31m✗\033[0m %s\n\n' "$1" >&2; exit 1; }
 
-OWNER=''; EMAILS=''; NAME=''; LANG_OPT=''; YES=0; UNINSTALL=0
+OWNER=''; EMAILS=''; NAME=''; LANG_OPT=''; YES=0; UNINSTALL=0; HOOKS=0; RULES=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --owner) OWNER="$2"; shift 2 ;;
-    --email) EMAILS="$2"; shift 2 ;;
-    --name) NAME="$2"; shift 2 ;;
-    --lang) LANG_OPT="$2"; shift 2 ;;
+    --owner) OWNER="${2:?--owner 要帶值}"; shift 2 ;;
+    --email) EMAILS="${2:?--email 要帶值}"; shift 2 ;;
+    --name) NAME="${2:?--name 要帶值}"; shift 2 ;;
+    --lang) LANG_OPT="${2:?--lang 要帶值}"; shift 2 ;;
     --yes|-y) YES=1; shift ;;
+    --with-hooks) HOOKS=1; shift ;;
+    --with-rules) RULES=1; shift ;;
+    --full) HOOKS=1; RULES=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     *) die "不認得的參數：$1（--help 看用法）" ;;
   esac
 done
 
-command -v jq >/dev/null 2>&1 || die '缺 jq（合併 settings.json 要用）：brew install jq 或 apt install jq'
-command -v node >/dev/null 2>&1 || die '缺 node（hooks 用 node 跑，要 20 以上）'
-[ "$(node -p 'process.versions.node.split(".")[0]')" -ge 20 ] || die "node 版本太舊：$(node -v)，要 20 以上"
+# 帳號相關的參數只有 hooks 用得到。不准因為給了參數就默默裝 hooks、改全域 git 設定。
+if [ -n "$OWNER$EMAILS$NAME$LANG_OPT" ] && [ "$HOOKS" = 0 ] && [ "$UNINSTALL" = 0 ]; then
+  die '--owner／--email／--name／--lang 要搭配 --with-hooks 或 --full'
+fi
+
 command -v git >/dev/null 2>&1 || die '缺 git'
+if [ "$HOOKS" = 1 ]; then
+  command -v jq >/dev/null 2>&1 || die '缺 jq（合併 settings.json 要用）：brew install jq 或 apt install jq'
+  command -v node >/dev/null 2>&1 || die '缺 node（hooks 用 node 跑，要 20 以上）'
+  [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 20 ] || die "node 版本太舊：$(node -v)，要 20 以上"
+fi
 # 私人版（有 bootstrap.sh）的 settings.json 用 "$HOME/…" 寫 hook，這支加的是展開後的路徑，會重複掛、還會寫進 repo
 [ -f "$REPO/bootstrap.sh" ] && die '這是私人版 repo，請用 bootstrap.sh；install.sh 給公開版用'
 
@@ -65,7 +76,8 @@ if [ "$UNINSTALL" = 1 ]; then
     ours "$p" && rm "$p" && g "移除 $p"
   done
   S="$CLAUDE/settings.json"
-  if [ -f "$S" ]; then
+  if [ -f "$S" ] && grep -qF "$REPO/" "$S"; then
+    command -v jq >/dev/null 2>&1 || die '缺 jq：拿掉 settings.json 裡的 hooks 要用'
     cp "$S" "$S.bak-$STAMP"
     jq --arg r "$REPO/" '
       if .hooks then .hooks |= (with_entries(.value |= (map(.hooks |= map(select((.command // "") | contains($r) | not)))
@@ -83,6 +95,7 @@ fi
 
 printf '\n  安裝到 %s\n\n' "$CLAUDE"
 
+if [ "$HOOKS" = 1 ]; then
 # ── 1. 設定檔 ───────────────────────────────────────────────────────
 ask() {  # ask <提示> <預設值> → 印出答案
   local a
@@ -123,27 +136,41 @@ else
   PRG=false; y "git $(git --version | awk '{print $3}') 不到 2.55，不裝 pre-push；pr-guard 關閉"
 fi
 tmp=$(mktemp); jq --argjson p "$PRG" '.pr_guard = $p' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+fi
 
 # ── 2. skills ──────────────────────────────────────────────────────
 mkdir -p "$CLAUDE/skills"
 if [ "$(cd "$CLAUDE/skills" && pwd -P)" = "$(cd "$REPO" && pwd -P)" ]; then
   d 'repo 本身就是 ~/.claude/skills，skill 不用另外連'
 else
+  # 新版拿掉的 skill 會留下斷掉的連結，順手收掉
+  for p in "$CLAUDE"/skills/*; do
+    if ours "$p" && [ ! -e "$p" ]; then rm "$p"; d "移除斷掉的連結：$(basename "$p")"; fi
+  done
   for dir in "$REPO"/*/; do
     n=$(basename "$dir"); [ -f "$dir/SKILL.md" ] || continue
     dst="$CLAUDE/skills/$n"
     if [ -e "$dst" ] && ! ours "$dst"; then y "~/.claude/skills/$n 已經有別的東西，跳過"; continue; fi
     link "$n" "$dst" >/dev/null; g "skill：$n"
   done
+  # recon、ship 寫死 ~/.claude/skills/home/bin/…；home 沒有 SKILL.md，不會被當成 skill
+  if [ -e "$CLAUDE/skills/home" ] && ! ours "$CLAUDE/skills/home"; then
+    y '~/.claude/skills/home 已經有別的東西，跳過；recon、ship 的輔助工具會找不到'
+  else
+    link home "$CLAUDE/skills/home" >/dev/null; g '工具目錄：home'
+  fi
 fi
 
 # ── 3. 規則 ─────────────────────────────────────────────────────────
 # AGENTS.md 是正本、CLAUDE.md 一行 @AGENTS.md 匯入；兩個都要在 ~/.claude，只鋪一邊匯入會靜默失效。
-link home/claude/AGENTS.md "$CLAUDE/AGENTS.md"
-link home/claude/CLAUDE.md "$CLAUDE/CLAUDE.md"
-link home/claude/rules     "$CLAUDE/rules"
-link home/claude/commands  "$CLAUDE/commands"
+if [ "$RULES" = 1 ]; then
+  link home/claude/AGENTS.md "$CLAUDE/AGENTS.md"
+  link home/claude/CLAUDE.md "$CLAUDE/CLAUDE.md"
+  link home/claude/rules     "$CLAUDE/rules"
+  link home/claude/commands  "$CLAUDE/commands"
+fi
 
+if [ "$HOOKS" = 1 ]; then
 # ── 4. hooks 合併進 settings.json ───────────────────────────────────
 S="$CLAUDE/settings.json"
 [ -f "$S" ] || echo '{}' > "$S"
@@ -164,13 +191,24 @@ else
   g "hooks 合併進 settings.json（備份：settings.json.bak-${STAMP}）"
 fi
 
+fi
+
+# ── 5. 提醒缺的前置工具：只提醒，不自動裝、不算失敗 ───────────────────
+for pair in ship:gh ship:jq codex-drive:codex codex-drive:tmux inspect-ui:dev-browser; do
+  s=${pair%%:*}; c=${pair#*:}
+  [ -e "$CLAUDE/skills/$s" ] || continue
+  command -v "$c" >/dev/null 2>&1 || y "$s 要用 $c，這台沒裝；其他 skills 不受影響"
+done
+
+scope='skills'
+[ "$HOOKS" = 1 ] && scope="$scope、hooks"
+[ "$RULES" = 1 ] && scope="$scope、全域規則"
 cat <<EOF
 
-  裝好了。開一個新的 claude session 才會載入規則與 hooks。
+  裝好了（$scope）。開一個新的 claude session 才會生效。
 
-  驗證：
-    for t in "$REPO"/home/claude/hooks/test-*.mjs; do node "\$t" >/dev/null || echo "FAIL \$t"; done
-  改設定：編輯 $CONFIG
+  加裝 hooks：bash "$REPO/install.sh" --with-hooks
+  加裝作者的規則：bash "$REPO/install.sh" --with-rules
   解除安裝：bash "$REPO/install.sh" --uninstall
 
 EOF

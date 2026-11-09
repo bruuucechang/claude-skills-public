@@ -10,7 +10,7 @@
  * 音效、各自的路徑）。於是同步規則的 `sync-rules.cmd` 把規則檔帶過去了，
  * 而**擋那條規則的機制沒有跟著過去**。
  *
- * 2026-09-10 實測到的狀態：BRUCEVICTUS 與 desk 的規則檔跟 Air 逐位元相同
+ * 2026-09-10 實測到的狀態：Windows-PC 與 desk 的規則檔跟 Air 逐位元相同
  * （blob `220abdcd580a`），`ask-with-options.mjs` 也在（junction 進來的），
  * 但兩台的 `settings.json` 都沒有掛它。也就是說「問句一律給選項」這條規則
  * 在那兩台上**只是文字**，而使用者自己寫的第 2 條原則是

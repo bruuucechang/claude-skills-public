@@ -31,7 +31,7 @@ twitch／YouTube 的視窗。所以 MCP 分頁跟他的分頁**同住一個視�
 
 ## 開瀏覽器之前先走這四步
 
-1. **只是要把畫面叫出來給人看** → `proj open <name>`（要指定其他埠就加 label）。
+1. **只是要把畫面叫出來給人看** → `~/.claude/skills/home/claude/tools/bgopen <網址>`。
    走 AppleScript 找同源分頁**重新載入**，完全不碰 MCP：不建分頁、不建群組、
    不留殘骸。代價是 Claude 讀不到頁面內容 —— 但「給人看」本來就不需要。
 2. **後端／API／資料庫** → `curl`、`psql`、CLI。永遠不要為了驗後端開瀏覽器。

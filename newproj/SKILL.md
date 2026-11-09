@@ -212,8 +212,6 @@ proj new <name>      # 名稱只能是小寫字母、數字、連字號
 
 ## 3. 設 local git 身分（`proj new` 不做）
 
-**有一批舊 commit 作者是壞的**——主要是主機名假信箱（141 筆），
-`work@example.com` 只有 6 筆，兩種都不會連到 GitHub 帳號（細節與重算指令見 `ship`）。
 新 repo 不會自動帶對的身分。正確身分讀 `~/.claude/skills/home/claude/config.json`
 （`git_name` 與 `git_emails` 的第一個；安裝時填的）：
 
@@ -223,6 +221,8 @@ git config user.name  "$(jq -r '.git_name' "$CFG")"
 git config user.email "$(jq -r '.git_emails[0]' "$CFG")"
 git log -1 --format='%an <%ae>'      # 驗證
 ```
+
+只裝 skills 時沒有這個檔：改用 `git config user.name` 與 `git config user.email` 的值，判斷是不是自己的 repo 就看 remote 的帳號。
 
 第一個 commit 已經被 `proj new` 做掉了，所以它的作者可能是錯的。
 在專案還很小的時候修掉最容易：`git commit --amend --reset-author --no-edit`。

@@ -139,7 +139,7 @@ git diff --stat HEAD~20 HEAD | tail -20
 
 ## 在 Windows 上核對時，先確認自己看到的是真的
 
-這台（BRUCEVICTUS）有三個會讓「核對」本身給出錯誤結論的陷阱，全部實測確認過
+這台（Windows-PC）有三個會讓「核對」本身給出錯誤結論的陷阱，全部實測確認過
 （細節在 `env-doctor` 的 windows.md）：
 
 - **`Get-Content` 預設不是 UTF-8**（主控台碼頁 950）。讀含中文的文件會是亂碼，

@@ -532,6 +532,22 @@ else
   printf '  \033[33m－\033[0m %s\n' "略過 design-scan fixture：這台沒有 dev-browser（Windows 等），在有的機器上跑 inspect-ui/fixtures/check.py"
 fi
 
+# ── 匯出的私人段落標記（2026-11-09，public-anyone-spec.md）。公開版沒有這支，跳過 ───
+if [ -f "$S/export-strip-private.pl" ]; then
+  printf '\n  export-strip-private\n\n'
+  sp="$T/strip.md"
+  printf 'a\n  <!-- private:start -->\nsecret\n  <!-- private:end -->\n<!-- public: pub -->\nb\n' > "$sp"
+  if perl "$S/export-strip-private.pl" "$sp" && [ "$(cat "$sp")" = "$(printf 'a\npub\nb')" ]; then g '成對標記刪乾淨、public 打開'; else b '標記處理結果不對' "$(cat "$sp")"; fi
+  printf 'a\n<!-- private:start -->\nsecret\n' > "$sp"
+  if perl "$S/export-strip-private.pl" "$sp" 2>/dev/null; then b '有開沒關應該要失敗' "$(cat "$sp")"; else g '有開沒關會失敗'; fi
+  if grep -q secret "$sp"; then g '失敗時不改檔'; else b '失敗時動到檔案' "$(cat "$sp")"; fi
+  printf 'a\n<!-- private:end -->\n' > "$sp"
+  if perl "$S/export-strip-private.pl" "$sp" 2>/dev/null; then b '有關沒開應該要失敗' ''; else g '有關沒開會失敗'; fi
+fi
+
+# 公開版拿掉了 trend-scout
+
+if [ -d "$S/trend-scout" ]; then
 printf '\n  trend-scout\n\n'
 F="$S/tests/fixtures/trend-scout"
 out=$( python3 "$S/trend-scout/collect.py" --seen /dev/null/x --html "$F/trending.html" --search-json "$F/agent-skills.json" 2>&1 )
@@ -624,6 +640,8 @@ printf '#!/bin/bash\necho "[]"\n' > "$TS/bin/collect0"; chmod +x "$TS/bin/collec
 rm -f "$TS/st/done-2026-W44"; out=$(COLLECT_CMD="$TS/bin/collect0" ts ok); rc=$?
 [ "$rc" = 0 ] && [ -e "$TS/st/done-2026-W44" ] && printf '%s' "$out" | grep -q '沒有新候選' && ! printf '%s' "$out" | grep -q '完成：' \
   && g "run.sh：0 個候選不叫 claude、記成做完" || b "0 個候選還是叫了 claude" "rc=$rc $out"
+
+fi
 
 printf '\n  %s 過 · %s 失敗\n\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

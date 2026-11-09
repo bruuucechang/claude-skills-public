@@ -109,7 +109,7 @@ stdout，不走 `Write-Output`。
 
 為什麼要動到系統層：這兩台的介面語言是 zh-TW，**每一個失敗指令的系統錯誤訊息都是中文**，
 以 big5 送回來、被 Claude Code 當 UTF-8 解，整段變亂碼進到對話裡——模型讀到垃圾就會照著垃圾誤判
-（實測 BRUCEVICTUS 某個 session 的 42 個解碼失敗字元全部來自 `tool_result` 的 PowerShell 中文錯誤訊息）。
+（實測 Windows-PC 某個 session 的 42 個解碼失敗字元全部來自 `tool_result` 的 PowerShell 中文錯誤訊息）。
 
 **要還原**：每台上有 `C:\Users\<帳號>\revert-codepage.ps1`，提權跑完重開機即可。
 已知風險是舊的本地化軟體（例如證券憑證元件）可能不吃 UTF-8 ANSI——真的出事就用那支還原。

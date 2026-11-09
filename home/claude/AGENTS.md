@@ -41,45 +41,27 @@
 - 不可逆／花錢／對外發布／要密碼的事一定先問，也是用選項問。
 - commit 訊息一律 `git commit -F - <<'MSG'`：殼層展開會安靜吃字，`-m` 只放行不含 `\` 與 `$` 的單引號字串（hook 在擋）。
 
-### 常設授權：已裁示過，不要再問
 
-| 不要再問 | 限制（是裁示的一部分） |
-|---|---|
-| 驗證乾淨後 commit **並 push** | 見 [[feedback_auto_commit_push]] |
-| 推一個我這個 session 沒 commit 過的 repo | 只 add 自己動過的檔，不掃別的 session 的改動 |
-| 順手清理超出範圍的東西 | 只限可回復的；**刪資料一律要問** |
-| 「要不要接著做下一件」 | 只限還在這次請求範圍內；`blocks.md` 已寫好的區塊都算範圍內 |
-| 程式碼開 PR、審查後自己合併 | 只限自己的 repo；只改文件照舊直推；擋兩輪後由 agent 裁定、自己合併，不留給使用者按；不碰 GitHub 規範（不 `--admin`、不用別的帳號 approve）（`ship` skill，2026-10-21） |
-| 換手後要不要開工 | 新 session 讀完交接單就照下一步做，只有重大事件才停（定義在 `blocks` skill，2026-10-19） |
-
-**沒有授權**：rebase／改寫已 push 的歷史、force push——別台機器可能已經 pull。
+rebase 已 push 的歷史、force push 一律先問：別台機器可能已經 pull。
 
 ## 回合的邊界：寫散文＝結束回合
 
 談定之後做到完（含驗證與收尾），最後回報一次。**還有事可做就繼續呼叫工具**；
 不准說「跑完我再回報」然後結束回合。見 [[stop-is-writing-prose]]。
-**這次請求做完的最後一推之後，交接給新 session**（2026-10-16 裁示）：寫交接單 → `handoff-open <交接單>`
-→ 回合結束後同一格自己 `/clear` 再讀交接單接著做（2026-10-20 改，常駐）。中途的 push 不算；做法在 `handoff` skill。
-區塊計畫底下每做完一塊就這樣換手，清完的 session 自己接下一塊——不叫使用者動手、不等他下令。
 
 ## 長工用背景等
 
 讓指令本身在**條件成立或程序死掉時**退出（Claude Code：`run_in_background`；其他：`nohup`／`tmux`）。
 回合結束前要嘛有活著的背景任務、要嘛有排好的 wakeup。武裝過濾前問：「程序現在崩潰，
 我的過濾會吐出任何東西嗎？」見 [[background-wait-filter-traps]]。
-輪詢一律用 `tools/waitfor`（一定要寫失敗或程序死掉的條件，成功、失敗、死掉、逾時都會退出），手寫的 `until … sleep` 迴圈 `wait-guard` 會擋。
+輪詢一律用 `~/.claude/skills/home/claude/tools/waitfor`（一定要寫失敗或程序死掉的條件，成功、失敗、死掉、逾時都會退出），手寫的 `until … sleep` 迴圈 `wait-guard` 會擋。
 
 ## 不准搶使用者的畫面
 
 在背景跑，不把視窗推到他面前、不切走他正在看的分頁（可能在看直播）。
-網址／檔案用 `tools/bgopen`、會開視窗的程式用 `tools/bgrun`、專案網頁用 `proj open`、Codex 只跑 tmux。
+網址／檔案用 `~/.claude/skills/home/claude/tools/bgopen`、會開視窗的程式用 `~/.claude/skills/home/claude/tools/bgrun`、Codex 只跑 tmux。
 focus-guard hook 在擋，見 [[no-focus-steal]]。
 
-## 大量抓資料交給 pager-scraper
-
-同一個站 20 頁以上、整站、定期重抓、依主題批次收集 → `~/Projects/pager-scraper/tools/pager-scraper grab <網址> "想要什麼"`（用 `run_in_background`），不要自己逐頁讀進對話。
-它只印 30 行摘要，細看用 `show <站點> --sql "…"`。結束碼：完成 0、失敗 1、要真人 3（叫使用者處理，通過後背景自動接著抓）。
-查一個事實、讀一兩篇文件照舊用搜尋與讀網頁；專案既有的爬蟲不搬。
 
 ## 驗證：分前後端
 

@@ -12,11 +12,7 @@
 - 問句與 approve → `AskUserQuestion`（Stop hook `ask-with-options.mjs` 在擋），送出前核對繁體。
 - 等一件事完成 → `Bash` 帶 `run_in_background: true`，結束時自動叫醒你；每次發生都要通知才用 `Monitor`。
 - 能按的提示直接幫他按（[[auto-click-prompts]]）；密碼／不可逆／花錢／對外發布仍用選項先問。
-- 常用流程是指令：`/progress` 彙報進度、`/up` 啟動專案、`/ship` 驗證後推、`/handoff` 寫交接單、`/recon` 動 repo 前查現況。
-- 專門工作交給 subagent（office 角色的出差版）：`ui-verifier`、`reviewer`、`researcher`、`dispatcher`。
-  照規格寫東西的苦工派 `writer`（Sonnet）、判斷／審查才用 Opus；素材先切好，一個子代理 5～10 項就交回。
-  派 `general-purpose` 沒寫 `model`、或同一則訊息派 4 個以上 `model: "opus"` 的 `general-purpose`，會被 `agent-model-guard` 擋（[[subagent-token-burn]]）。
-  子代理說「做完了／過了」不算數：自己看 `git diff` 與驗收指令的輸出再回報。
+- 常用流程是指令：`/progress` 彙報進度、`/ship` 驗證後推、`/handoff` 寫交接單、`/recon` 動 repo 前查現況。
 
 ## 瀏覽器：五條硬規則（沒讀前端檔就決定開瀏覽器時也成立）
 
@@ -30,6 +26,4 @@
 
 ## 規則放在哪
 
-`~/.claude/{AGENTS.md,CLAUDE.md,rules,settings.json,commands,agents}` 都是 symlink 進 `~/.claude/skills`，
-地圖與數字在 `~/.claude/ARCHITECTURE.md`（`tools/mkarch.py` 量的，不自動載入）。
 某個 session 載入了什麼：`~/.claude/logs/instructions-loaded.jsonl` 或 `/context`（[[claude-md-context-mechanics]]）。

@@ -7,8 +7,7 @@ description: 「push」「推上去」「/ship」或 commit 之前跑。一氣�
 
 ## 0. /ship 一氣做完的流程（2026-10-12）
 
-使用者打「push」「git push」「/ship」就是要這整串，**不要中途停下來問**（常設授權：commit 就 push；
-2026-10-20 起程式碼改走 PR、審查通過就自己合併，也是常設授權）。force push、改寫已推歷史不在授權裡。
+使用者打「push」「git push」「/ship」就是要這整串，不要中途停下來問。合併 PR 前先問使用者，除非使用者明確授權過；force push、改寫已推歷史一律先問。
 只限自己的 repo（判準是 remote owner＝`~/.claude/skills/home/claude/config.json` 的 `github_owner`）；沒裝 `gh` 的機器（例：作者的兩台 Windows）照舊直推。
 
 1. `~/.claude/skills/home/bin/recon-check <要提交的檔…>`（Windows：`/recon` 那三行 `git status --short`、`git fetch -q && git status -sb | head -1`）。落後就先 `git pull --ff-only`；不能 ff 就停下用選項問。
@@ -21,7 +20,7 @@ description: 「push」「推上去」「/ship」或 commit 之前跑。一氣�
     改照 5b 第 1 步開 worktree，commit 後 `git -C "$W" push origin HEAD:<目標>`（只有 .md 不用 PR）。
     乾淨才在原地：第 2 節只 add 自己的檔，`add && commit` 同一次呼叫 → `git show --stat HEAD` → `git push` → 確認不再 ahead。
     全域 pre-push `pr-prepush.mjs` 會擋 agent 把程式碼推進非 `pr/` 分支；`pr-guard` hook 擋會跳過它的寫法：`--no-verify`、不到 2.55 的 git（`/usr/bin/git` 是 Apple 2.50）、這台還沒裝全域 hook。
-5b. **PR**（規格 `ship/pr-flow-spec.md`）。**mac 上第 1、2、5、6 步是一支指令**（2026-10-21 W3；審查與合併的判斷仍是你的事）：
+5b. **PR**。**mac 上第 1、2、5、6 步是一支指令**（2026-10-21 W3；審查與合併的判斷仍是你的事）：
    ```bash
    ~/.claude/skills/home/bin/ship-pr -F <訊息檔> [--body <PR 內文檔>] <短名> <自己的檔…>   # 最後一行印 PR 完整網址
    ~/.claude/skills/home/bin/ship-pr --merge <PR 完整網址>                               # 審查通過後
@@ -30,11 +29,11 @@ description: 「push」「推上去」「/ship」或 commit 之前跑。一氣�
    它從 `origin/<目標>` 開 `~/.claude/worktrees/pr-<日期>-<短名>`、整檔搬（檔裡混了別人的 hunk 先照第 2 節分開）、
    commit 成功後才從共用 checkout 拿掉（之前任何失敗都整個收回）、推分支、`gh pr create --head`。
    `--merge` 先確認 worktree 乾淨（有未追蹤檔就列出來停下）再移掉、`gh pr merge --squash --delete-branch`、確認 MERGED、共用 checkout ff。
-   要修的時候在它印的 worktree 裡改、commit、`git -C <worktree> push`。**animyria 不用這支**（lane＋pushq，見下面）。
+   要修的時候在它印的 worktree 裡改、commit、`git -C <worktree> push`。
    下面是它做的事，Windows 或腳本不適用時照手做：
    1. **不要在共用的 checkout 裡切分支**——別的 session 正在同一個工作區，切了它們會 commit 到你的分支上。
       `<目標>`＝這個 checkout 追的分支（`git rev-parse --abbrev-ref @{u}` 去掉 `origin/`；沒有 upstream 就用
-      `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`），不一定是 master——claude-skills 的工作在 `feature/dataviz-tufte-skills`。
+      `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`），不一定是 master。
       worktree 只從 `origin/<目標>` 長；共用 checkout 上別人沒推的 commit 不歸你管，不要替它推、也不要 reset 掉。
       **把自己的改動整包搬進 worktree，共用 checkout 同時拿掉**（之後改動只活在分支上，修幾輪、卡住都不會留殘骸）：
       ```bash
@@ -46,7 +45,6 @@ description: 「push」「推上去」「/ship」或 commit 之前跑。一氣�
       ```
       在 `$W` 裡照第 2 節 add＋commit，`git -C "$W" push -u origin "$B"`。
       已經在自己的 lane worktree（animyria）就直接在 lane 裡開分支，不必再開。
-      **animyria**：推分支加 `--no-verify`——pre-push 的長測試由 pushq 在合併前跑，推分支不必先跑一次（pushq-guard 只擋推 master）。
       這時 refspec **要把分支名寫出來**（`HEAD:pr/261021-0930-xxx`），或在 lane 裡（cwd 在 pr/ 分支上）推 `HEAD`：
       pr-guard 看不到 `"$B"`／`"$W"` 這種變數，寫變數會被當成推別的分支擋下。
    2. `gh pr create --base <目標> --head "$B" --fill-first`（一定帶 `--head`：cwd 是共用 checkout，不帶會拿錯分支），
@@ -54,22 +52,18 @@ description: 「push」「推上去」「/ship」或 commit 之前跑。一氣�
    3. 用 Skill 跑 `code-review`，參數 `high <PR 完整網址> --comment`，結果留在 PR 上。
       **一定給網址不給號碼**：審查跑在 fork 出去的 agent，cwd 不一定是這個 repo——只給 `1` 時它猜成別的 repo 的 PR #1（2026-10-20 實際發生）。`high` 寧可多報，所以**逐條自己判**：
       實測重現、或讀程式能指出確定會壞的正確性問題才算擋下；推論型、清理、文件措辭留在 PR 上不擋，回報時列出。
+      沒有 `code-review` skill 就自己讀 diff 審查，或請使用者審。
    4. 擋下 → 在 `$W` 修、**在 `$W` 重跑第 2 步的專案驗證**（缺依賴就把共用 checkout 的 `node_modules`／`.venv` 之類 symlink 過去）、
-      commit、push 同一分支、重審。**PR 不留給使用者按**（2026-10-21 裁示）：兩輪後還擋，逐條裁定——
-      確定會壞的繼續修；推論型、故意繞（不在威脅模型）、清理建議在 PR 留言寫明理由後合併，回報時列出。
+      commit、push 同一分支、重審。兩輪後還擋，把剩下的問題列給使用者決定。
       修 bug 補的回歸測試要**看它紅一次**才算數，做法照 `debug` skill 第五步（不碰 index、最後 `git status --porcelain` 為空）。
       **確定會壞的正確性問題一律照修**；只有推論型、清理、「做完整一點」這類可以不照改——
       跟使用者裁示衝突的，留言寫明是哪條裁示；「做完整」先 grep 有沒有人用到，沒人用就不做。
       **不碰 GitHub 規範**：不用別的帳號 approve 自己、不 `gh pr merge --admin`、不改 branch protection、不關 required checks。
    5. 通過 → **先** `git worktree remove "$W"`（分支還被 worktree 佔著時 `--delete-branch` 刪不掉本機分支）→
       `gh pr merge <號> --squash --delete-branch`。
-      **animyria 改成** 在 lane 裡 `pushq enqueue`（commit 進 master 後 GitHub 自己把 PR 標成已合併）；
-      pushq 回 needs_fix 時修的那一筆**推回同一個 PR 分支、重審過再重新 enqueue**，不准沒審就進 master。
-   6. `gh pr view <號> --json state` 是 `MERGED`（animyria 看 `pushq status`）→ 共用 checkout `git pull --ff-only`。不能 ff 通常是別的 session 有沒推的 commit：**不要合併、不要問**，
+   6. `gh pr view <號> --json state` 是 `MERGED`→ 共用 checkout `git pull --ff-only`。不能 ff 通常是別的 session 有沒推的 commit：**不要合併、不要問**，
       留給它們下次推的時候拉；回報寫「已合併，這個 checkout 還沒同步」。
 6. 回報：commit hash 或 PR 網址、審查結果、驗證跑了什麼。
-7. **如果這是這次請求做完的最後一推**（不是中途的 push），回報完接著走 `handoff` skill 的「做完自動交接」：
-   寫交接單 → `handoff-open <交接單>`。這一步之後就結束回合，這格會自己 /clear 再讀交接單接著做。
 
 三件事，每一件都出過事。**這一份 mac 與 Windows 通用**——git 指令本身沒有平台差異，
 作者身分要求也一樣（`PreToolUse` 掛勾兩邊都會擋錯身分的 commit）。
@@ -79,22 +73,6 @@ Windows 專屬的兩點在最後一節。
 
 ## 1. 作者身分
 
-**舊 commit 裡有兩種壞掉的作者，數量差 20 倍，容易只抓到小的那種**
-（2026-09-03 實測，掃 `~/Projects` 底下所有 repo 加 `.projctl` 與 `claude-skills`）：
-
-| 壞法 | 筆數 | 分布 |
-|---|---|---|
-| **主機名假信箱**（`xxx@MacBook-Pro.local` 這類） | **141** | interior-designer 77、palrogue 57、News 7 |
-| `work@example.com`（位址沒註冊在 GitHub） | 6 | loan-ledger 2、namecard-archive 3、interior-designer 1 |
-
-兩種在 GitHub 上都不會連到帳號。**只 grep `work@example.com` 會漏掉 96% 的問題。**
-要重算：
-
-```bash
-for d in ~/Projects/*/; do [ -d "$d/.git" ] || continue
-  git -C "$d" log --all --format='%ae' | grep -cE '^peter@work\.tw$|@(Mac|MacBook|DESKTOP|BRUCEVICTUS|.*\.local|.*\.lan)'
-done
-```
 
 正確身分寫在 repo 的 `home/claude/config.json`（`git_name` 與 `git_emails` 的第一個，安裝時填的）。
 從這個 skill 的實體位置找，repo 不一定在 `~/.claude/skills`：
@@ -103,6 +81,8 @@ done
 CFG="$(cd ~/.claude/skills/ship && pwd -P)/../home/claude/config.json"
 jq -r '"\(.git_name) <\(.git_emails[0])>"' "$CFG"
 ```
+
+只裝 skills 時沒有這個檔：改用 `git config user.name` 與 `git config user.email` 的值，判斷是不是自己的 repo 就看 remote 的帳號。
 
 每個 repo 各自設定，新 clone 的 repo 不會自動帶上。commit 前確認：
 
@@ -170,14 +150,8 @@ git status --short
   這就是被吃掉了，不是你搞錯。用 `git log -1 --format='%h %s' -- <檔案>`
   查它被併進哪一筆，先確認內容完整。
 - **內容完整就不要動它**。那筆已經 push 了，拆開要 force push，而這個 repo
-  常在好幾台機器都有 clone，而且路徑各不相同（例：作者的四台）：
+  常在好幾台機器都有 clone，而且路徑各不相同。
 
-  | 機器 | clone 在哪 |
-  |---|---|
-  | Air | `~/.claude/skills` |
-  | M5 Pro | **`~/.profiles/bruce/claude-skills`**（不是 `~/.claude/skills`——那個是另一套 rivendell 的 symlink 農場） |
-  | BRUCEVICTUS | `C:\Users\user\.claude\skills` |
-  | DESKTOP-KR4TOIA | `C:\Users\peter\.claude\skills` |
 
   要補紀錄就加一筆 `--allow-empty` 的空 commit 當註腳。
 
@@ -208,45 +182,12 @@ rebase 之後**重新檢查你的改動內容還成不成立**——這是最容
 埠位、目錄結構在 rebase 之後全部要改）。內容要改就 `git commit --amend`，
 不要留一個一提交就過期的版本。
 
-### ⚠ 有兩個 repo 不能 rebase：`projctl` 與 `claude-skills`
-
-它們的歷史裡有 **`git subtree` 的合併**，一共三次：
-
-| 併進去的 | 落在哪 | 何時 |
-|---|---|---|
-| `chrome-tab-groups` | `projctl/chrome-ext/` | 2026-08-17 |
-| `air2-bootstrap` | `claude-skills/machine-setup/macos/` | 2026-08-17 |
-| `win-worker-bootstrap` | `claude-skills/machine-setup/windows/` | 2026-09-02 |
-
-**三個來源 repo 都已經從 GitHub 刪掉了**（2026-09-03），但那不影響這條規則——
-被匯入的 commit 活在這兩個 repo 自己的歷史裡，rebase 照樣會去重放它們。
-`git pull --rebase` 會去**重放那些被匯入的 commit**，然後炸在一個跟你完全無關的
-衝突上（實測訊息：`Could not apply 5e03f99... feat: bootstrap script...`），
-而且你會停在 rebase 進行中的狀態。
-
-這兩個 repo 一律用合併拉：
-
-```bash
-git pull --no-rebase origin master
-```
-
-**已經炸了的話**：`git rebase --abort`（`--autostash` 的暫存會自己還原回來），
-再改用 `--no-rebase` 拉一次。
-
-怎麼認出一個 repo 有沒有 subtree：
-
-```bash
-git log --oneline | grep "^[0-9a-f]* Add '"      # 有 "Add 'xxx/' from commit ..." 就是
-```
-
-其餘 repo 照原本的 rebase 流程，**不要因為這條就全部改成 merge**——
-那會在每個 repo 的歷史裡長出一堆沒有意義的合併節點。
 
 ---
 
 ## 分支名不一定是 master
 
-這幾個 repo 混用：`loan-ledger` 是 **`main`**，其餘是 `master`。
+不同 repo 的預設分支可能是 `main` 或 `master`。
 `git push origin master` 打錯分支只會得到一個看不出所以然的錯誤。用：
 
 ```bash
@@ -274,7 +215,7 @@ Claude-Session: <當前 session 的 URL>
 
 ## 在 Windows 上多兩件事
 
-**1. 換行。** Windows 上 git 常是 `core.autocrlf=true`（作者的 BRUCEVICTUS 實測）：checkout 出來是 CRLF、
+**1. 換行。** Windows 上 git 常是 `core.autocrlf=true`（作者的 Windows-PC 實測）：checkout 出來是 CRLF、
 commit 回去是 LF，所以正常情況 `git status` 是乾淨的。但看到「整個檔案都被改了」
 的 diff 時**先排除換行再說**：
 
@@ -294,17 +235,6 @@ remote 長 `git@github-<repo>:<owner>/<repo>.git`。push 被拒且訊息是
 
 ---
 
-## commit 完就 push，不要停下來問
+## 要不要自動 push
 
-**這是常設授權**（SessionStart hook 也是這樣寫的）：使用者已經單獨打過 9 次
-「push」當作一整個回合，那 9 次都是不該存在的回合。commit 完就在同一輪推掉。
-
-一次要推多個 repo 時，逐個報告結果——其中一個被拒絕不該淹沒在成功訊息裡。
-
-**這三種還是要先問**，它們不在常設授權範圍內：
-
-- `--force` / `--force-with-lease`（見上面第 3 節，這個 repo 三台機器 clone）
-- 改寫已經 push 出去的歷史（rebase、amend 已推的 commit、`filter-branch`）
-- 推到一個你這輪沒有 commit 過的 repo
-
-（「開 PR」原本在這裡，2026-10-20 改成常設授權：程式碼走第 0 節的 5b。）
+照使用者的習慣；沒有授權過就先問。force push、改寫已推歷史一律先問。

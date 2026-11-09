@@ -5,7 +5,7 @@ description: 開始改一個 repo 之前先跑（/recon）。這裡常有多個 
 
 # 開工前的現況確認
 
-**這台機器常有多個 Claude session 同時在改同一個 repo，另外還有三台機器會推東西上去。**
+**同一個 repo 可能有多個 Claude session 同時在改，你的其他機器也可能推東西上去。**
 session 開始時讀到的檔案內容、記憶檔裡的敘述、上一輪對話留下的印象，
 到你真正動手的那一刻都可能已經不成立。
 
@@ -17,8 +17,8 @@ session 開始時讀到的檔案內容、記憶檔裡的敘述、上一輪對話
 
 ## 為什麼這一支不能省略（2026-09-16 補）
 
-**這四台機器合起來就是一個多 agent 系統，而 GitHub 那份 repo 是它的共享狀態。**
-四台機器上的 session 彼此不直接通訊，全靠讀寫同一塊狀態協調——這在多 agent 的
+**同時改同一個 repo 的 session 和機器，合起來就是一個多 agent 系統，而 GitHub 那份 repo 是它的共享狀態。**
+它們彼此不直接通訊，全靠讀寫同一塊狀態協調——這在多 agent 的
 文獻裡叫 blackboard，而它有一個已知的失效模式：
 
 > 多個並行的 agent 共享可變狀態時，會誤以為跨 agent 邊界的更新是同步的，
@@ -71,8 +71,6 @@ mac 一支做完（2026-10-21 W3）——在 repo 裡跑，後面接**要碰的�
 （behind 時列出 origin 多的 commit，**碰到要碰的檔的另外標出來**）、要碰的檔各自的狀態與 mtime、
 其餘未 commit 的檔（不是你的就別碰、別 add）、最近 5 個 commit。判讀仍是你的事，照下面「怎麼判讀」。
 
-**自動換手接手時（2026-10-21 W4）**：handoff-open 的開場白有 `## 現況快照` 的話（clear／tmux／switch 才有，exit 0 才算數），
-不用再跑一次；照快照判讀就好。要碰的檔不在快照裡、或快照之後過了很久才動手，再帶檔名跑一次。
 
 Windows 或要手動跑時，就是這幾行：
 
@@ -156,17 +154,17 @@ Get-Item <路徑> -Force | Select-Object LinkType, Target
 **每台機器都可能 clone 同一批 repo**，也各自有 Claude session 在跑。
 `git fetch` 只看得到已經推上去的東西——**別台工作區裡沒 commit 的改動你看不到**。
 
+只有一台機器就跳過這一節。
+
 **每台的專案樹路徑不一樣**，這是最容易查錯地方的一點。把你自己的機器列成一張這樣的表
-（例：作者的四台）：
+（例）：
 
 | 機器 | 怎麼連 | 專案樹 |
 |---|---|---|
-| 這台 Air | — | `~/Projects` |
-| **M5 Pro** | `ssh pro` | **`~/Code`**（不是 `~/Projects`） |
-| BRUCEVICTUS | `ssh victus` | `D:\Claude\Projects` |
-| DESKTOP-KR4TOIA | `ssh desk` | `E:\Project` |
+| 這台筆電 | — | `~/Projects` |
+| 桌機 | `ssh desktop` | `~/Code` |
 
-機器清單與各自的角色另有一份正本（例：作者的 `worker` skill）；這裡只列查現況要用的路徑。
+機器清單與各自的角色另有一份正本；這裡只列查現況要用的路徑。
 
 要動一個「別台最近也在弄」的 repo，先過去看一眼（主機與專案樹換成你那張表的）：
 
@@ -175,9 +173,7 @@ ssh <mac 或 Linux 主機> 'cd <專案樹>/<repo> && git status --short && git l
 ssh <Windows 主機> 'cd /d <磁碟機>:\<專案樹>\<repo> && git status --short && git log --oneline -3'
 ```
 
-**不要只查其中一台。** 例：2026-09-03 實測：M5 Pro 的 `~/Code/trip-atlas` 有
-**176 個未提交檔案**——記憶檔 `trip-atlas` 記的「2026-08-19 起整個開發環境搬到
-M5 Pro」就是這個意思。只 ssh 到 Windows 那台等於完全沒查。
+**不要只查其中一台。** 別台機器上可能有還沒 push 的改動。
 
 **`/d` 不能省**（Windows 主機）。SSH 過去的預設殼層是 `cmd.exe`，而 cmd 的 `cd`
 **不會換磁碟機**——少了 `/d` 就還留在 `%USERPROFILE%`，git 回一句
